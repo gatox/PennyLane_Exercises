@@ -7,9 +7,9 @@ from pennylane import jordan_wigner
 import jax
 from jax import numpy as jnp
 
-import matplotlib
-matplotlib.use("Agg")  # No GUI required
-import matplotlib.pyplot as plt
+#import matplotlib
+#matplotlib.use("Agg")  # No GUI required
+#import matplotlib.pyplot as plt
 import optax
 
 jax.config.update("jax_enable_x64", True)
@@ -130,14 +130,12 @@ def E_PNOF4(params, rdm1=None):
 
     return E_nuc + E1 + E2
 
-"""
-Minimization
-"""
+# =========================
+# Energy minimization
+# =========================
 
-max_iterations = 1000
-conv_tol = 1e-3
 
-def vqe(E_fn, params):
+def vqe(E_fn, params, conv_tol, max_iterations):
     opt = optax.sgd(learning_rate=0.1)
     opt_state = opt.init(params)
 
@@ -164,20 +162,30 @@ def vqe(E_fn, params):
     return E_history, params_history
 
 
-#params = 0.22501
-#
-#ene = E_PNOF4(params)
-#
-#grad = jax.grad(E_PNOF4)(params)
+# =========================
+# Run the calculation
+# =========================
+if __name__ == "__main__":
 
-E_history, params_history = vqe(E_PNOF4, 0.1)
+    #params = 0.22501
 
-plt.plot(E_history, "o", label="PNOF4-VQE")
-plt.hlines(-1.137270174657105, 0, len(E_history), color="red", label = "FCI")
-plt.xlabel("Iterations")
-plt.ylabel(r"Energy ($E_\text{h}$)")
-plt.legend()
-plt.savefig("pnof4_vqe.png", dpi=300)
+    #ene = E_PNOF4(params)
+    max_iterations = 1000
+    conv_tol = 1e-7
+    ene_nofvqe_, params_ = vqe(E_PNOF4, 0.1, conv_tol, max_iterations) 
+    print("NOFVQE_Energy:", ene_nofvqe_[-1])
+    print("NOFVQE_Params:", params_[-1])
+    
+    #grad = jax.grad(E_PNOF4)(params)
+
+    #E_history, params_history = vqe(E_PNOF4, 0.1)
+#
+#plt.plot(E_history, "o", label="PNOF4-VQE")
+#plt.hlines(-1.137270174657105, 0, len(E_history), color="red", label = "FCI")
+#plt.xlabel("Iterations")
+#plt.ylabel(r"Energy ($E_\text{h}$)")
+#plt.legend()
+#plt.savefig("pnof4_vqe.png", dpi=300)
 
 
 

@@ -40,44 +40,6 @@ class NOFVQE:
         # print(unit, charge, multiplicity, symbols, geometry)
         return unit, charge, multiplicity, symbols, pnp.array(geometry, requires_grad=False)
 
-    # def _read_mol(filepath):
-    #     """
-    #     Reads a simple XYZ-like file that starts with unit in bohr.
-    #     It returns unit, charge, multiplicity, symbols, and geometry.
-
-    #     Parameters:
-    #         filepath (str): Path to the input file.
-
-    #     Returns:
-    #         unit (str): Bohr units.
-    #         charge (int): Molecular charge.
-    #         multiplicity (int): Spin multiplicity.
-    #         symbols (list[str]): Atomic symbols.
-    #         geometry (list[list[float]]): Atomic coordinates.
-    #     """
-    #     symbols = []
-    #     geometry = []
-
-    #     with open(filepath, 'r') as f:
-    #         lines = [line.strip() for line in f if line.strip()]
-
-    #     # First and second lines: unit, charge and multiplicity
-    #     unit = lines[0].split()
-    #     parts = lines[1].split()
-
-    #     unit, charge, multiplicity = str(unit[1]), int(parts[0]), int(parts[1])
-
-    #     # Remaining lines: atoms
-    #     for line in lines[2:]:
-    #         parts = line.split()
-    #         symbol = parts[0]
-    #         x, y, z = map(float, parts[1:4])
-    #         symbols.append(symbol)
-    #         geometry.append([x, y, z])
-
-    #     return unit, charge, multiplicity, symbols, pnp.array(geometry,requires_grad=False)
-
-     
     @staticmethod
     def _get_no_on(rdm1, norb):
     
@@ -105,7 +67,8 @@ class NOFVQE:
                  init_param=None, 
                  basis= 'sto-3g', 
                  max_iterations = 1000,
-                 gradient="df_fedorov"):
+                 gradient="df_fedorov",
+                 d_shift=1e-3):
         self.unit, self.charge, self.mul, self.symbols, self.crd = self._read_mol(geometry)
         self.basis = basis
         self.functional = functional
@@ -113,6 +76,7 @@ class NOFVQE:
         self.init_param = init_param
         self.max_iterations = max_iterations
         self.gradient = gradient
+        self.d_shift = d_shift
         self.init_param_default = 0.1
         if init_param is not None:
             self.init_param = init_param
@@ -286,7 +250,7 @@ class NOFVQE:
         self.opt_rdm1 = rdm1_history[-1]
         return E_history[-1], params_history[-1], rdm1_history[-1]
 
-    def _nuclear_gradient_fedorov(self, params, crds, rdm1_opt, h=1e-3):
+    def _nuclear_gradient_fedorov(self, params, crds, rdm1_opt, d_shift):
         """
         Compute nuclear gradient using central finite differences
         following Fedorov et al. JCP 154, 164103 (2021).
@@ -308,17 +272,17 @@ class NOFVQE:
                 crds_plus = crds.copy()
                 crds_minus = crds.copy()
                 # displaced geometries
-                crds_plus[a, xyz] = crds[a, xyz] + h
-                crds_minus[a, xyz] = crds[a, xyz] - h
+                crds_plus[a, xyz] = crds[a, xyz] + d_shift
+                crds_minus[a, xyz] = crds[a, xyz] - d_shift
 
                 E_plus, _ = self.ene_pnof4(params, crds_plus, rdm1=rdm1_opt)
                 E_minus, _ = self.ene_pnof4(params, crds_minus, rdm1=rdm1_opt)
 
-                grad[a, xyz] = (E_plus - E_minus) / (2 * h)
+                grad[a, xyz] = (E_plus - E_minus) / (2 * d_shift)
 
         return grad
 
-    def _nuclear_gradient(self, params, crds, h=1e-3, warm_start=True):
+    def _nuclear_gradient(self, params, crds, d_shift, warm_start=True):
         """
         Compute nuclear gradient using central finite differences for
         nuclear coordinates.
@@ -343,8 +307,8 @@ class NOFVQE:
                 crds_plus = crds.copy()
                 crds_minus = crds.copy()
                 # displaced geometries
-                crds_plus[a, xyz] = crds[a, xyz] + h
-                crds_minus[a, xyz] = crds[a, xyz] - h
+                crds_plus[a, xyz] = crds[a, xyz] + d_shift
+                crds_minus[a, xyz] = crds[a, xyz] - d_shift
 
                 # Warm start from the reference optimal params (or the last one)
                 p_start_plus = params_p if warm_start else self.init_param
@@ -358,7 +322,7 @@ class NOFVQE:
                     params_p = p_plus[-1]  # carry forward the latest parameters
                     params_m = p_minus[-1]  # carry forward the latest parameters
 
-                grad[a, xyz] = (E_plus[-1] - E_minus[-1]) / (2 * h)
+                grad[a, xyz] = (E_plus[-1] - E_minus[-1]) / (2 * d_shift)
 
         return grad
     
@@ -369,11 +333,11 @@ class NOFVQE:
             _,self.opt_param, self.opt_rdm1 = self.ene_vqe()
         if self.gradient == "df_fedorov":
             grad = self._nuclear_gradient_fedorov(
-            self.opt_param, self.crd, self.opt_rdm1
+            self.opt_param, self.crd, self.opt_rdm1, self.d_shift
             )
         elif self.gradient == "df_normal":
             grad = self._nuclear_gradient(
-            self.opt_param, self.crd
+            self.opt_param, self.crd, self.d_shift
             )
         else:
             raise SystemExit("The chosen gradient option is either incorrect or not implemented")
@@ -391,7 +355,8 @@ if __name__ == "__main__":
                  init_param=0.1, 
                  basis='sto-3g', 
                  max_iterations=500,
-                 gradient="df_fedorov")
+                 gradient="df_fedorov",
+                 d_shift=1e-3)
 
     # Run VQE
     E_min, params_opt, rdm1_opt = cal.ene_vqe()

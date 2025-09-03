@@ -1,0 +1,17 @@
+********************************************************************************
+*                                   SAMPLING                                   *
+*                                                                              *
+* Date           : 2025-09-03 11:52:37                                         *
+*                                                                              *
+* n_conditions_max: 1                                                          *
+* method         : Subquestions({'method = FixedSampler': <colt.answers.Answers*
+*                  Block object at 0x30f4dc9a0>})                              *
+* sampling_db    : /Users/salazar/Desktop/Edison/PostDoc_DIPC/PennyLane_Exercis*
+*                  es/test_nof_vqe/test_h2_dynamic_10_fs/prop/traj_00000000/sam*
+*                  pling.db                                                    *
+*                                                                              *
+********************************************************************************
+
+
+
+Loading sampler FixedSampler
