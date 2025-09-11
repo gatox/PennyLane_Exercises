@@ -10,11 +10,6 @@ import jax
 from jax import numpy as jnp
 
 import optax
-import psi4
-psi4.core.be_quiet()
-import pynof
-from scipy.linalg import eigh
-import re
 
 jax.config.update("jax_enable_x64", True)
 
@@ -23,29 +18,17 @@ class NOFVQE:
     @staticmethod
     def _read_mol(inputdata):
         """
-        Reads either a filepath (XYZ-like file) or a geometry string, 
-        and builds a psi4.Molecule object.
-
-        Returns:
-            unit (str): "bohr"
-            charge (int)
-            multiplicity (int)
-            symbols (list[str])
-            geometry (pnp.array): shape (natoms, 3)
-            mol (psi4.core.Molecule): Psi4 molecule object
-            xyz_str (str): full xyz string representation (for later use)
+        Reads either a filepath (XYZ-like file) or a geometry string.
         """
-        # --- Read XYZ data ---
-        if "\n" in inputdata or "units" in inputdata:
+        if "\n" in inputdata or "unit" in inputdata:
+            # assume it's a raw string, split into lines
             lines = [line.strip() for line in inputdata.splitlines() if line.strip()]
         else:
+            # assume it's a file path
             with open(inputdata, 'r') as f:
                 lines = [line.strip() for line in f if line.strip()]
 
-        # Build xyz string (Psi4 expects full string with header)
-        xyz_str = "\n".join(lines)
-
-        unit = lines[0].split()[1]  # first line: "units bohr" or "units angstrom"
+        unit = lines[0].split()[1]
         charge, multiplicity = map(int, lines[1].split())
 
         symbols = []
@@ -54,13 +37,8 @@ class NOFVQE:
             parts = line.split()
             symbols.append(parts[0])
             geometry.append([float(x) for x in parts[1:4]])
-
-        geometry = pnp.array(geometry, requires_grad=False)
-
-        # Build psi4 molecule directly from string
-        mol = psi4.geometry(xyz_str)
-
-        return unit, charge, multiplicity, symbols, geometry, mol
+        # print(unit, charge, multiplicity, symbols, geometry)
+        return unit, charge, multiplicity, symbols, pnp.array(geometry, requires_grad=False)
 
     @staticmethod
     def _get_no_on(rdm1, norb):
@@ -80,13 +58,7 @@ class NOFVQE:
         vecs = vecs[:, ::-1]
     
         return n, vecs
-    
-    
-    @staticmethod
-    def _func_indix(functional):
-        index = re.findall(r'\d+',functional)
-        return int(index[0])
-        
+
 
     def __init__(self, 
                  geometry, 
@@ -97,10 +69,9 @@ class NOFVQE:
                  max_iterations = 1000,
                  gradient="df_fedorov",
                  d_shift=1e-3):
-        self.unit, self.charge, self.mul, self.symbols, self.crd, self.mol = self._read_mol(geometry)
+        self.unit, self.charge, self.mul, self.symbols, self.crd = self._read_mol(geometry)
         self.basis = basis
         self.functional = functional
-        self.ipnof = self._func_indix(functional)
         self.conv_tol = conv_tol
         self.init_param = init_param
         self.max_iterations = max_iterations
@@ -113,10 +84,6 @@ class NOFVQE:
             self.init_param = self.init_param_default
         self.opt_param = None
         self.opt_rdm1 = None
-        self.opt_n = None
-        self.opt_vecs = None
-        self.opt_cj12 = None
-        self.opt_ck12 = None
 
     # ---------------- Ansatz ----------------
     def _ansatz(self, params, hf_state, qubits):
@@ -172,6 +139,7 @@ class NOFVQE:
         # Functions based on 1-RDM (J. Chem. Theory Comput. 2025, 21, 5, 2402–2413) and taked from the following repository:
         # https://github.com/felipelewyee/NOF-VQE
         
+        #E_nuc, h_MO, I_MO, n_elec, norb = self._mo_integrals(crds*1.8897259886) 
         E_nuc, h_MO, I_MO, n_elec, norb = self._mo_integrals(crds) 
         
         # Fermi level
@@ -229,13 +197,8 @@ class NOFVQE:
                 if p != q:
                     E2 += (n[q] * n[p] - Delta[q, p]) * (2 * J_NO[p, q] - K_NO[p, q])
                     E2 += Pi[q, p] * (K_NO[p, q])
-        
-        #NEW: Compute cj12 and ck12 (like pynof.CJCKD4)
-        n_outer = jnp.outer(n, n)
-        cj12 = 2.0 * (n_outer - Delta)
-        ck12 = n_outer - Delta - Pi
     
-        return E_nuc + E1 + E2, rdm1, n, vecs, cj12, ck12
+        return E_nuc + E1 + E2, rdm1
 
     # =========================
     # Energy minimization
@@ -248,15 +211,11 @@ class NOFVQE:
         # energy function that depends only on params (geometry fixed)
         E_single = lambda p: E_fn(p, crds)
         # evaluate once
-        E0, rdm1_0, n, vecs, cj12, ck12 = E_single(params)
+        E0, rdm1_0 = E_single(params)
 
         E_history = [E0]
         rdm1_history = [rdm1_0]
         params_history = [params]
-        n_history = [n]
-        vecs_history = [vecs]
-        cj12_history = [cj12]
-        ck12_history = [ck12]
         
         for it in range(self.max_iterations):
         
@@ -267,15 +226,11 @@ class NOFVQE:
             updates, opt_state = opt.update(gradient, opt_state)
             params = optax.apply_updates(params, updates)
 
-            E_val, rdm1_val, n_val, vecs_val, cj12_val, ck12_val = E_single(params)
+            E_val, rdm1_val = E_single(params)
 
             params_history.append(params)
             E_history.append(E_val)
             rdm1_history.append(rdm1_val)
-            n_history.append(n_val)
-            vecs_history.append(vecs_val)
-            cj12_history.append(cj12_val)
-            ck12_history.append(ck12_val)
         
             g_maxabs = jnp.max(jnp.abs(gradient))
         
@@ -284,22 +239,18 @@ class NOFVQE:
             if g_maxabs <= self.conv_tol:
                 break
 
-        return E_history, params_history, rdm1_history, n_history, vecs_history, cj12_history, ck12_history 
+        return E_history, params_history, rdm1_history
 
 
     def ene_vqe(self):
-        E_history, params_history, rdm1_history, n_history, vecs_history, cj12_history, ck12_history = self._vqe(
+        E_history, params_history, rdm1_history = self._vqe(
             self.ene_pnof4, self.init_param, self.crd
             )
         self.opt_param = params_history[-1]
         self.opt_rdm1 = rdm1_history[-1]
-        self.opt_n = n_history[-1]
-        self.opt_vecs = vecs_history[-1]
-        self.opt_cj12 = cj12_history[-1]
-        self.opt_ck12 = ck12_history[-1]
-        return E_history[-1], params_history[-1], rdm1_history[-1], n_history[-1], vecs_history[-1], cj12_history[-1], ck12_history[-1]
+        return E_history[-1], params_history[-1], rdm1_history[-1]
 
-    def _nuclear_gradient_dff_fedorov(self, params, crds, rdm1_opt, d_shift):
+    def _nuclear_gradient_fedorov(self, params, crds, rdm1_opt, d_shift):
         """
         Compute nuclear gradient using central finite differences
         following Fedorov et al. JCP 154, 164103 (2021).
@@ -324,14 +275,14 @@ class NOFVQE:
                 crds_plus[a, xyz] = crds[a, xyz] + d_shift
                 crds_minus[a, xyz] = crds[a, xyz] - d_shift
 
-                E_plus, _, _, _, _, _ = self.ene_pnof4(params, crds_plus, rdm1=rdm1_opt)
-                E_minus, _, _, _, _, _ = self.ene_pnof4(params, crds_minus, rdm1=rdm1_opt)
+                E_plus, _ = self.ene_pnof4(params, crds_plus, rdm1=rdm1_opt)
+                E_minus, _ = self.ene_pnof4(params, crds_minus, rdm1=rdm1_opt)
 
                 grad[a, xyz] = (E_plus - E_minus) / (2 * d_shift)
 
         return grad
 
-    def _nuclear_gradient_dff_normal(self, params, crds, d_shift, warm_start=True):
+    def _nuclear_gradient(self, params, crds, d_shift, warm_start=True):
         """
         Compute nuclear gradient using central finite differences for
         nuclear coordinates.
@@ -363,8 +314,8 @@ class NOFVQE:
                 p_start_plus = params_p if warm_start else self.init_param
                 p_start_minus = params_m if warm_start else self.init_param
 
-                E_plus, p_plus, _, _, _, _, _ = self._vqe(self.ene_pnof4, p_start_plus, crds_plus)
-                E_minus, p_minus, _, _, _, _, _ = self._vqe(self.ene_pnof4, p_start_minus, crds_minus)
+                E_plus, p_plus, _ = self._vqe(self.ene_pnof4, p_start_plus, crds_plus)
+                E_minus, p_minus, _ = self._vqe(self.ene_pnof4, p_start_minus, crds_minus)
 
                 # Optional: update warm-start for the next coordinate
                 if warm_start:
@@ -375,58 +326,19 @@ class NOFVQE:
 
         return grad
     
-    def _nuclear_gradient_analytic(self):
-        """
-        Computing the nuclear gradient using PyNOF package (from: 
-        https://github.com/felipelewyee/PyNOF), inspired by 
-        I. Mitxelena and M. Piris JCP 146, 014102 (2017)
-
-        Args:
-            the required parameters are computed once the VQE is called
-
-        Returns:
-            grad (array): nuclear gradient, same shape as crds
-        """
-        p = pynof.param(self.mol,basis)
-        p.ipnof = self.ipnof
-        p.RI = True
-        S,T,V,H,I,b_mnl,_ = pynof.compute_integrals(p.wfn,self.mol,p)
-        _, C = eigh(H, S)  
-        C = pynof.check_ortho(C,S,p)
-        C_AO_MO = C             # shape (nbf, nbf)  (AO -> canonical MO)
-        V_MO_NO = np.array(self.opt_vecs)  # columns are NOs in MO basis
-        # Build AO->NO coefficients
-        C_AO_NO = np.dot(C_AO_MO, V_MO_NO)   # shape (nbf, norb) -> AO -> NO 
-        C_AO_NO = np.array(C_AO_NO)       
-        n_np = np.array(self.opt_n)
-        cj12_np = np.array(self.opt_cj12)
-        ck12_np = np.array(self.opt_ck12)
-        if(p.no1==0):
-            elag,_ = pynof.computeLagrange2(n_np,cj12_np,ck12_np,C_AO_MO,H,I,b_mnl,p)
-        else:
-            J,K = pynof.computeJKj(C_AO_MO,I,b_mnl,p)
-            if(p.MSpin==0):
-                F = pynof.computeF_RC_driver(J,K,n_np,H,cj12_np,ck12_np,p)
-            elif(not p.MSpin==0):
-                F = pynof.computeF_RO_driver(J,K,n_np,H,cj12_np,ck12_np,p)
-            elag = pynof.computeLagrange(F,C_AO_MO,p)
-        return pynof.compute_geom_gradients(p.wfn,self.mol,n_np,C_AO_NO,cj12_np,ck12_np,elag,p)
-    
     def grad(self):
         """The gradient is a post-processing calculation that depends on first computing the energy by VQE optimization"""
         if self.opt_param is None:
             print("Optimal parameter is None. Proceeding to compute the vqe energy")
             _,self.opt_param, self.opt_rdm1 = self.ene_vqe()
         if self.gradient == "df_fedorov":
-            grad = self._nuclear_gradient_dff_fedorov(
+            grad = self._nuclear_gradient_fedorov(
             self.opt_param, self.crd, self.opt_rdm1, self.d_shift
             )
         elif self.gradient == "df_normal":
-            grad = self._nuclear_gradient_dff_normal(
+            grad = self._nuclear_gradient(
             self.opt_param, self.crd, self.d_shift
             )
-        elif self.gradient == "analytic":
-            grad = self._nuclear_gradient_analytic()
         else:
             raise SystemExit("The chosen gradient option is either incorrect or not implemented")
         return grad
@@ -436,33 +348,20 @@ class NOFVQE:
 # Run the calculation
 # =========================
 if __name__ == "__main__":
-    import psi4
-    import pynof
-    from scipy.linalg import eigh
     xyz_file = "h2_bohr.xyz"
-    functional="PNOF4"
-    conv_tol=1e-5
-    init_param=0.1
-    basis='sto-3g'
-    max_iterations=500
-    gradient="df_fedorov"
-    #gradient="analytic"
-    d_shift=1e-3
     cal = NOFVQE(xyz_file, 
-                 functional=functional, 
-                 conv_tol=conv_tol, 
-                 init_param=init_param, 
-                 basis=basis, 
-                 max_iterations=max_iterations,
-                 gradient=gradient,
-                 d_shift=d_shift)
+                 functional="PNOF4", 
+                 conv_tol=1e-5, 
+                 init_param=0.1, 
+                 basis='sto-3g', 
+                 max_iterations=500,
+                 gradient="df_fedorov",
+                 d_shift=1e-3)
 
     # Run VQE
-    E_min, params_opt, rdm1_opt, n, vecs, cj12, ck12 = cal.ene_vqe()
+    E_min, params_opt, rdm1_opt = cal.ene_vqe()
     print("Min Ene VQE and param:", E_min, params_opt)
-    # Nuclear gradient at optimized parameters (finite differences by Fedorov)
+    
+    # Nuclear gradient at optimized geometry (finite differences by Fedorov)
     grad_fedorov = cal.grad()
     print("Nuclear gradient (Fedorov):\n", grad_fedorov)
-    # Nuclear gradient at optimized parameters (analytic)
-    # grad_analytic = cal.grad()
-    # print("Nuclear gradient (analytical):\n", grad_analytic)    
