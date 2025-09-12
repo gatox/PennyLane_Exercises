@@ -96,7 +96,7 @@ class NOFVQE:
                  basis= 'sto-3g', 
                  max_iterations = 1000,
                  gradient="df_fedorov",
-                 d_shift=1e-3):
+                 d_shift=1e-4):
         self.unit, self.charge, self.mul, self.symbols, self.crd, self.mol = self._read_mol(geometry)
         self.basis = basis
         self.functional = functional
@@ -445,24 +445,26 @@ if __name__ == "__main__":
     init_param=0.1
     basis='sto-3g'
     max_iterations=500
-    gradient="df_fedorov"
-    #gradient="analytic"
-    d_shift=1e-3
-    cal = NOFVQE(xyz_file, 
-                 functional=functional, 
-                 conv_tol=conv_tol, 
-                 init_param=init_param, 
-                 basis=basis, 
-                 max_iterations=max_iterations,
-                 gradient=gradient,
-                 d_shift=d_shift)
+    #gradient="df_fedorov"
+    gradient="analytic"
+    #d_shift=1e-3
+    cal = NOFVQE(
+            xyz_file, 
+            functional=functional, 
+            conv_tol=conv_tol, 
+            init_param=init_param, 
+            basis=basis, 
+            max_iterations=max_iterations,
+            gradient=gradient,
+            #d_shift=d_shift
+                 )
 
     # Run VQE
     E_min, params_opt, rdm1_opt, n, vecs, cj12, ck12 = cal.ene_vqe()
     print("Min Ene VQE and param:", E_min, params_opt)
     # Nuclear gradient at optimized parameters (finite differences by Fedorov)
-    grad_fedorov = cal.grad()
-    print("Nuclear gradient (Fedorov):\n", grad_fedorov)
+    #grad_fedorov = cal.grad()
+    #print("Nuclear gradient (Fedorov):\n", grad_fedorov)
     # Nuclear gradient at optimized parameters (analytic)
-    # grad_analytic = cal.grad()
-    # print("Nuclear gradient (analytical):\n", grad_analytic)    
+    grad_analytic = cal.grad()
+    print("Nuclear gradient (analytical):\n", grad_analytic)    
