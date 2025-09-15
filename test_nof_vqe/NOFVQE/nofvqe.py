@@ -96,7 +96,8 @@ class NOFVQE:
                  basis= 'sto-3g', 
                  max_iterations = 1000,
                  gradient="df_fedorov",
-                 d_shift=1e-4):
+                 d_shift=1e-4,
+                 ):
         self.unit, self.charge, self.mul, self.symbols, self.crd, self.mol = self._read_mol(geometry)
         self.basis = basis
         self.functional = functional
@@ -375,7 +376,7 @@ class NOFVQE:
 
         return grad
     
-    def _nuclear_gradient_analytic(self):
+    def _nuclear_gradient_analytics(self):
         """
         Computing the nuclear gradient using PyNOF package (from: 
         https://github.com/felipelewyee/PyNOF), inspired by 
@@ -387,10 +388,10 @@ class NOFVQE:
         Returns:
             grad (array): nuclear gradient, same shape as crds
         """
-        p = pynof.param(self.mol,basis)
+        p = pynof.param(self.mol,self.basis)
         p.ipnof = self.ipnof
         p.RI = True
-        S,T,V,H,I,b_mnl,_ = pynof.compute_integrals(p.wfn,self.mol,p)
+        S,_,_,H,I,b_mnl,_ = pynof.compute_integrals(p.wfn,self.mol,p)
         _, C = eigh(H, S)  
         C = pynof.check_ortho(C,S,p)
         C_AO_MO = C             # shape (nbf, nbf)  (AO -> canonical MO)
@@ -425,8 +426,8 @@ class NOFVQE:
             grad = self._nuclear_gradient_dff_normal(
             self.opt_param, self.crd, self.d_shift
             )
-        elif self.gradient == "analytic":
-            grad = self._nuclear_gradient_analytic()
+        elif self.gradient == "analytics":
+            grad = self._nuclear_gradient_analytics()
         else:
             raise SystemExit("The chosen gradient option is either incorrect or not implemented")
         return grad
@@ -436,9 +437,6 @@ class NOFVQE:
 # Run the calculation
 # =========================
 if __name__ == "__main__":
-    import psi4
-    import pynof
-    from scipy.linalg import eigh
     xyz_file = "h2_bohr.xyz"
     functional="PNOF4"
     conv_tol=1e-5
@@ -446,7 +444,7 @@ if __name__ == "__main__":
     basis='sto-3g'
     max_iterations=500
     #gradient="df_fedorov"
-    gradient="analytic"
+    gradient="analytics"
     #d_shift=1e-3
     cal = NOFVQE(
             xyz_file, 
@@ -465,6 +463,6 @@ if __name__ == "__main__":
     # Nuclear gradient at optimized parameters (finite differences by Fedorov)
     #grad_fedorov = cal.grad()
     #print("Nuclear gradient (Fedorov):\n", grad_fedorov)
-    # Nuclear gradient at optimized parameters (analytic)
-    grad_analytic = cal.grad()
-    print("Nuclear gradient (analytical):\n", grad_analytic)    
+    # Nuclear gradient at optimized parameters (analytics)
+    grad_analytics = cal.grad()
+    print("Nuclear gradient (analytical):\n", grad_analytics)    
