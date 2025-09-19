@@ -15,6 +15,7 @@ psi4.core.be_quiet()
 import pynof
 from scipy.linalg import eigh
 import re
+import os
 
 jax.config.update("jax_enable_x64", True)
 
@@ -32,8 +33,8 @@ class NOFVQE:
             multiplicity (int)
             symbols (list[str])
             geometry (pnp.array): shape (natoms, 3)
-            mol (psi4.core.Molecule): Psi4 molecule object
             xyz_str (str): full xyz string representation (for later use)
+            mol (psi4.core.Molecule): Psi4 molecule object
         """
         # --- Read XYZ data ---
         if "\n" in inputdata or "units" in inputdata:
@@ -44,8 +45,8 @@ class NOFVQE:
 
         # Build xyz string (Psi4 expects full string with header)
         xyz_str = "\n".join(lines)
-
-        unit = lines[0].split()[1]  # first line: "units bohr" or "units angstrom"
+        xyz_str = "symmetry c1\n" + xyz_str
+        units = lines[0].split()[1]  # first line: "units bohr" or "units angstrom"
         charge, multiplicity = map(int, lines[1].split())
 
         symbols = []
@@ -60,7 +61,7 @@ class NOFVQE:
         # Build psi4 molecule directly from string
         mol = psi4.geometry(xyz_str)
 
-        return unit, charge, multiplicity, symbols, geometry, mol
+        return units, charge, multiplicity, symbols, geometry, mol
 
     @staticmethod
     def _get_no_on(rdm1, norb):
@@ -87,7 +88,6 @@ class NOFVQE:
         index = re.findall(r'\d+',functional)
         return int(index[0])
         
-
     def __init__(self, 
                  geometry, 
                  functional="PNOF4", 
@@ -97,8 +97,10 @@ class NOFVQE:
                  max_iterations = 1000,
                  gradient="df_fedorov",
                  d_shift=1e-4,
+                 C_MO=None,
                  ):
-        self.unit, self.charge, self.mul, self.symbols, self.crd, self.mol = self._read_mol(geometry)
+        self.units, self.charge, self.mul, self.symbols, self.crd, self.mol = self._read_mol(geometry)
+        #self.crd = np.array([[self.mol.x(i), self.mol.y(i), self.mol.z(i)] for i in range(self.mol.natom())])
         self.basis = basis
         self.functional = functional
         self.ipnof = self._func_indix(functional)
@@ -108,6 +110,9 @@ class NOFVQE:
         self.gradient = gradient
         self.d_shift = d_shift
         self.init_param_default = 0.1
+        self.p = pynof.param(self.mol,self.basis)
+        self.p.ipnof = self.ipnof
+        self.p.RI = True
         if init_param is not None:
             self.init_param = init_param
         else:
@@ -118,6 +123,20 @@ class NOFVQE:
         self.opt_vecs = None
         self.opt_cj12 = None
         self.opt_ck12 = None
+        self.C_AO_MO = None
+        self.H_ao = None 
+        self.I_ao = None 
+        self.b_mnl = None
+        self.C = None
+        if C_MO == "guest_C_MO":
+            print("reading C_MO guest")
+            file = "pynof_C.npy"
+            if os.path.exists(file):
+                self.C = pynof.read_C(self.p.title)
+            else:
+                print(f"File {file} not found, setting C_MO = None for this step")
+        else:
+            print("C_MO = None")
 
     # ---------------- Ansatz ----------------
     def _ansatz(self, params, hf_state, qubits):
@@ -140,21 +159,62 @@ class NOFVQE:
                     cpaq += coeff * op
                 ops.append(cpaq)
         return ops
-
-    # ---------- integrals at a geometry (MO basis) ----------
-    def _mo_integrals(self, crds):
+    
+    # ---------- integrals at a geometry (MO basis) from pennylane ----------
+    def _mo_integrals_pennylane(self, crd):
         """Return (E_nuc, h_MO, I_MO, n_electrons, norb) at given geometry (bohr)."""
         mol = qml.qchem.Molecule(symbols = self.symbols, 
-                                 coordinates = crds, 
+                                 coordinates = crd, 
                                  charge = self.charge, 
                                  mult = self.mul, 
                                  basis_name = self.basis, 
-                                 unit = self.unit)
+                                 unit = self.units)
         core, h_MO, I_MO = qml.qchem.electron_integrals(mol)()  # MO integrals
         E_nuc = core[0]
         n_elec = mol.n_electrons
         norb = int(h_MO.shape[0])
         return jnp.array(E_nuc), jnp.array(h_MO), jnp.array(I_MO), n_elec, norb
+    
+    def _read_C_MO(self, C,S_ao,p):
+        if C is None:
+            _, C = eigh(self.H_ao, S_ao)
+        else:
+            # MO guest (C)
+            C_old = np.copy(C)
+            for i in range(p.ndoc):
+                for j in range(p.ncwo):
+                    k = p.no1 + p.ndns + (p.ndoc - i - 1) * p.ncwo + j
+                    l = p.no1 + p.ndns + (p.ndoc - i - 1) + j*p.ndoc
+                    C[:,k] = C_old[:,l]
+        C = pynof.check_ortho(C,S_ao,p)
+        np.save(p.title+"_C.npy",C)
+        print(f"saving {p.title}C.npy")
+        return C
+    
+    # ---------- integrals at a geometry (MO basis) from pynof ----------
+    def _mo_integrals_pynof(self):
+        mol_local = self.mol
+        p = self.p
+        # Compute integrals with PyNOF (from AO to MO)
+        S_ao, _, _, self.H_ao, self.I_ao, self.b_mnl, _ = pynof.compute_integrals(p.wfn,mol_local,p)
+        self.C_AO_MO = self._read_C_MO(self.C,S_ao,p)
+        h_MO,I_or_b_MO = pynof.JKH_MO_tmp(self.C_AO_MO,self.H_ao,self.I_ao,self.b_mnl,p)
+        if self.p.RI:
+            b_MO = I_or_b_MO
+            I_MO = np.einsum("pql,rsl->prsq", b_MO, b_MO, optimize=True)
+        else:
+            I_MO = np.transpose(I_or_b_MO, axes=(0,2,3,1))
+        norb = int(h_MO.shape[0])
+        E_nuc = mol_local.nuclear_repulsion_energy()
+        n_elec = p.ne
+        return jnp.array(E_nuc), jnp.array(h_MO), jnp.array(I_MO), n_elec, norb
+    
+    def _mo_integrals(self, crd):
+        if self.gradient == "analytics":
+            E_nuc, h_MO, I_MO, n_elec, norb = self._mo_integrals_pynof()
+        else:
+            E_nuc, h_MO, I_MO, n_elec, norb = self._mo_integrals_pennylane(crd)
+        return E_nuc, h_MO, I_MO, n_elec, norb
 
     # ---------- measure 1-RDM on the circuit ----------
     def _rdm1_from_circuit(self, params, n_elec, norb):
@@ -329,7 +389,6 @@ class NOFVQE:
                 E_minus, _, _, _, _, _ = self.ene_pnof4(params, crds_minus, rdm1=rdm1_opt)
 
                 grad[a, xyz] = (E_plus - E_minus) / (2 * d_shift)
-
         return grad
 
     def _nuclear_gradient_dff_normal(self, params, crds, d_shift, warm_start=True):
@@ -388,30 +447,25 @@ class NOFVQE:
         Returns:
             grad (array): nuclear gradient, same shape as crds
         """
-        p = pynof.param(self.mol,self.basis)
-        p.ipnof = self.ipnof
-        p.RI = True
-        S,_,_,H,I,b_mnl,_ = pynof.compute_integrals(p.wfn,self.mol,p)
-        _, C = eigh(H, S)  
-        C = pynof.check_ortho(C,S,p)
-        C_AO_MO = C             # shape (nbf, nbf)  (AO -> canonical MO)
+        C_AO_MO = self.C_AO_MO
         V_MO_NO = np.array(self.opt_vecs)  # columns are NOs in MO basis
         # Build AO->NO coefficients
-        C_AO_NO = np.dot(C_AO_MO, V_MO_NO)   # shape (nbf, norb) -> AO -> NO 
+        C_AO_NO = np.dot(self.C_AO_MO, V_MO_NO)   # shape (nbf, norb) -> AO -> NO 
         C_AO_NO = np.array(C_AO_NO)       
         n_np = np.array(self.opt_n)
         cj12_np = np.array(self.opt_cj12)
         ck12_np = np.array(self.opt_ck12)
-        if(p.no1==0):
-            elag,_ = pynof.computeLagrange2(n_np,cj12_np,ck12_np,C_AO_MO,H,I,b_mnl,p)
+        H,I,b_mnl = self.H_ao, self.I_ao, self.b_mnl
+        if(self.p.no1==0):
+            elag,_ = pynof.computeLagrange2(n_np,cj12_np,ck12_np,C_AO_MO,H,I,b_mnl,self.p)
         else:
-            J,K = pynof.computeJKj(C_AO_MO,I,b_mnl,p)
+            J,K = pynof.computeJKj(C_AO_MO,I,b_mnl,self.p)
             if(p.MSpin==0):
-                F = pynof.computeF_RC_driver(J,K,n_np,H,cj12_np,ck12_np,p)
+                F = pynof.computeF_RC_driver(J,K,n_np,H,cj12_np,ck12_np,self.p)
             elif(not p.MSpin==0):
-                F = pynof.computeF_RO_driver(J,K,n_np,H,cj12_np,ck12_np,p)
-            elag = pynof.computeLagrange(F,C_AO_MO,p)
-        return pynof.compute_geom_gradients(p.wfn,self.mol,n_np,C_AO_NO,cj12_np,ck12_np,elag,p)
+                F = pynof.computeF_RO_driver(J,K,n_np,H,cj12_np,ck12_np,self.p)
+            elag = pynof.computeLagrange(F,C_AO_MO,self.p)
+        return pynof.compute_geom_gradients(self.p.wfn,self.mol,n_np,C_AO_NO,cj12_np,ck12_np,elag,self.p)
     
     def grad(self):
         """The gradient is a post-processing calculation that depends on first computing the energy by VQE optimization"""
@@ -445,7 +499,8 @@ if __name__ == "__main__":
     max_iterations=500
     #gradient="df_fedorov"
     gradient="analytics"
-    #d_shift=1e-3
+    d_shift=1e-4
+    C_MO = "guest_C_MO"
     cal = NOFVQE(
             xyz_file, 
             functional=functional, 
@@ -454,15 +509,12 @@ if __name__ == "__main__":
             basis=basis, 
             max_iterations=max_iterations,
             gradient=gradient,
-            #d_shift=d_shift
+            d_shift=d_shift,
+            C_MO=C_MO,
                  )
-
     # Run VQE
     E_min, params_opt, rdm1_opt, n, vecs, cj12, ck12 = cal.ene_vqe()
     print("Min Ene VQE and param:", E_min, params_opt)
-    # Nuclear gradient at optimized parameters (finite differences by Fedorov)
-    #grad_fedorov = cal.grad()
-    #print("Nuclear gradient (Fedorov):\n", grad_fedorov)
-    # Nuclear gradient at optimized parameters (analytics)
-    grad_analytics = cal.grad()
-    print("Nuclear gradient (analytical):\n", grad_analytics)    
+    # Nuclear gradient
+    grad = cal.grad()
+    print(f"Nuclear gradient ({gradient}):\n", grad)    
