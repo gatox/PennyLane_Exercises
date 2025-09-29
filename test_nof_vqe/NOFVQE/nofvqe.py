@@ -208,7 +208,29 @@ class NOFVQE:
     def _rdm1_from_circuit(self, params, n_elec, norb):
         qubits = 2 * norb
         hf_state = [1] * n_elec + [0] * (qubits - n_elec)
-        dev = qml.device("lightning.qubit", wires=qubits)
+        #dev = qml.device("lightning.qubit", wires=qubits)
+        # Load fake IBM backend and build noisy simulator
+        from qiskit_ibm_runtime import QiskitRuntimeService
+        from qiskit_aer import AerSimulator
+
+        service = QiskitRuntimeService()
+        backend = service.backend("ibm_pittsburgh")
+        backend = AerSimulator.from_backend(backend) #AER Simulator#
+        backend.set_options(
+            max_parallel_threads = 0,
+            max_parallel_experiments = 0,
+            max_parallel_shots = 1,
+            statevector_parallel_threshold = 16,
+        )
+
+        # Use PennyLane device with noisy simulator
+        shots = 1000
+        dev = qml.device('qiskit.remote', 
+                         wires=backend.num_qubits,
+                         backend=backend,
+                         optimization_level=3,
+                         resilience_level=2,
+                         shots=shots)
 
         @qml.qnode(dev, interface="jax")
         def rdm1_qnode(theta):
@@ -481,7 +503,7 @@ class NOFVQE:
 if __name__ == "__main__":
     xyz_file = "h2_bohr.xyz"
     functional="PNOF4"
-    conv_tol=1e-5
+    conv_tol=1e-1
     init_param=0.1
     basis='sto-3g'
     max_iterations=500
