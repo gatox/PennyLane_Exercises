@@ -174,14 +174,6 @@ class NOFVQE:
     def _read_C_MO(self, C,S_ao,p):
         if C is None:
             _, C = eigh(self.H_ao, S_ao)
-        else:
-            # MO guest (C)
-            # C_old = np.copy(C)
-            # for i in range(p.ndoc):
-            #     for j in range(p.ncwo):
-            #         k = p.no1 + p.ndns + (p.ndoc - i - 1) * p.ncwo + j
-            #         l = p.no1 + p.ndns + (p.ndoc - i - 1) + j*p.ndoc
-            #         C[:,k] = C_old[:,l]
         C = pynof.check_ortho(C,S_ao,p)
         np.save(p.title+"_C.npy",C)
         print(f"saving {p.title}C.npy")
