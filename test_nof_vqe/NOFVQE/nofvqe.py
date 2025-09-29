@@ -95,7 +95,7 @@ class NOFVQE:
                  init_param=None, 
                  basis= 'sto-3g', 
                  max_iterations = 1000,
-                 gradient="df_fedorov",
+                 gradient="analytics",
                  d_shift=1e-4,
                  C_MO=None,
                  ):
@@ -128,15 +128,11 @@ class NOFVQE:
         self.I_ao = None 
         self.b_mnl = None
         self.C = None
-        if C_MO == "guest_C_MO":
+        if self.gradient == "analytics" and C_MO == "guest_C_MO":
             print("reading C_MO guest")
             file = "pynof_C.npy"
             if os.path.exists(file):
                 self.C = pynof.read_C(self.p.title)
-            else:
-                print(f"File {file} not found, setting C_MO = None for this step")
-        else:
-            print("C_MO = None")
 
     # ---------------- Ansatz ----------------
     def _ansatz(self, params, hf_state, qubits):
@@ -180,12 +176,12 @@ class NOFVQE:
             _, C = eigh(self.H_ao, S_ao)
         else:
             # MO guest (C)
-            C_old = np.copy(C)
-            for i in range(p.ndoc):
-                for j in range(p.ncwo):
-                    k = p.no1 + p.ndns + (p.ndoc - i - 1) * p.ncwo + j
-                    l = p.no1 + p.ndns + (p.ndoc - i - 1) + j*p.ndoc
-                    C[:,k] = C_old[:,l]
+            # C_old = np.copy(C)
+            # for i in range(p.ndoc):
+            #     for j in range(p.ncwo):
+            #         k = p.no1 + p.ndns + (p.ndoc - i - 1) * p.ncwo + j
+            #         l = p.no1 + p.ndns + (p.ndoc - i - 1) + j*p.ndoc
+            #         C[:,k] = C_old[:,l]
         C = pynof.check_ortho(C,S_ao,p)
         np.save(p.title+"_C.npy",C)
         print(f"saving {p.title}C.npy")
