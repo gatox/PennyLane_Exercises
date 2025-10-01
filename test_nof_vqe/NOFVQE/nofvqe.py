@@ -91,13 +91,15 @@ class NOFVQE:
     def __init__(self, 
                  geometry, 
                  functional="PNOF4", 
-                 conv_tol=1e-7, 
+                 conv_tol=1e-5, 
                  init_param=None, 
                  basis= 'sto-3g', 
                  max_iterations = 1000,
                  gradient="analytics",
                  d_shift=1e-4,
                  C_MO=None,
+                 dev="simulator",
+                 n_shots=None,
                  ):
         self.units, self.charge, self.mul, self.symbols, self.crd, self.mol = self._read_mol(geometry)
         #self.crd = np.array([[self.mol.x(i), self.mol.y(i), self.mol.z(i)] for i in range(self.mol.natom())])
@@ -133,6 +135,9 @@ class NOFVQE:
             file = "pynof_C.npy"
             if os.path.exists(file):
                 self.C = pynof.read_C(self.p.title)
+        self.dev = dev
+        if self.dev != "simulator":
+            self.n_shots = n_shots
 
     # ---------------- Ansatz ----------------
     def _ansatz(self, params, hf_state, qubits):
@@ -208,29 +213,31 @@ class NOFVQE:
     def _rdm1_from_circuit(self, params, n_elec, norb):
         qubits = 2 * norb
         hf_state = [1] * n_elec + [0] * (qubits - n_elec)
-        #dev = qml.device("lightning.qubit", wires=qubits)
-        # Load fake IBM backend and build noisy simulator
-        from qiskit_ibm_runtime import QiskitRuntimeService
-        from qiskit_aer import AerSimulator
-
-        service = QiskitRuntimeService()
-        backend = service.backend("ibm_pittsburgh")
-        backend = AerSimulator.from_backend(backend) #AER Simulator#
-        backend.set_options(
-            max_parallel_threads = 0,
-            max_parallel_experiments = 0,
-            max_parallel_shots = 1,
-            statevector_parallel_threshold = 16,
-        )
-
-        # Use PennyLane device with noisy simulator
-        shots = 1000
-        dev = qml.device('qiskit.remote', 
-                         wires=backend.num_qubits,
-                         backend=backend,
-                         optimization_level=3,
-                         resilience_level=2,
-                         shots=shots)
+        if self.dev == "simulator":
+            dev = qml.device("lightning.qubit", wires=qubits)
+        else:
+            from qiskit_ibm_runtime import QiskitRuntimeService
+            service = QiskitRuntimeService()
+            if self.dev == "noise_simulator":
+                # Load fake IBM backend and build noisy simulator
+                from qiskit_aer import AerSimulator
+                backend = service.backend("ibm_pittsburgh")
+                backend = AerSimulator.from_backend(backend) #AER Simulator#
+            elif self.dev == "real":
+                backend = service.least_busy(operational=True, simulator=False)
+            backend.set_options(
+                max_parallel_threads = 0,
+                max_parallel_experiments = 0,
+                max_parallel_shots = 1,
+                statevector_parallel_threshold = 16,
+            )
+            # Use PennyLane device real/with noisy simulator
+            dev = qml.device('qiskit.remote', 
+                            wires=backend.num_qubits,
+                            backend=backend,
+                            optimization_level=3,
+                            resilience_level=2,
+                            shots=self.n_shots)
 
         @qml.qnode(dev, interface="jax")
         def rdm1_qnode(theta):
