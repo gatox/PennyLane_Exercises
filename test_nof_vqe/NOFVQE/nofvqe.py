@@ -518,6 +518,8 @@ if __name__ == "__main__":
     gradient="analytics"
     d_shift=1e-4
     C_MO = "guest_C_MO"
+    dev="simulator"
+    n_shots=10000
     cal = NOFVQE(
             xyz_file, 
             functional=functional, 
@@ -528,6 +530,8 @@ if __name__ == "__main__":
             gradient=gradient,
             d_shift=d_shift,
             C_MO=C_MO,
+            dev=dev,
+            n_shots=n_shots,
                  )
     # Run VQE
     E_min, params_opt, rdm1_opt, n, vecs, cj12, ck12 = cal.ene_vqe()
