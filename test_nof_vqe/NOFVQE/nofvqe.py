@@ -1,3 +1,4 @@
+import time
 import pennylane as qml
 from pennylane import numpy as pnp
 import numpy as np
@@ -211,34 +212,45 @@ class NOFVQE:
 
     # ---------- measure 1-RDM on the circuit ----------
     def _rdm1_from_circuit(self, params, n_elec, norb):
+        max_retries = 10
+        retry_delay = 5
         qubits = 2 * norb
         hf_state = [1] * n_elec + [0] * (qubits - n_elec)
         if self.dev == "simulator":
             dev = qml.device("lightning.qubit", wires=qubits)
         else:
+            # Attempt IBM Q with retries
             from qiskit_ibm_runtime import QiskitRuntimeService
-            service = QiskitRuntimeService()
-            if self.dev == "noise_simulator":
-                # Load fake IBM backend and build noisy simulator
-                from qiskit_aer import AerSimulator
-                backend = service.backend("ibm_pittsburgh")
-                backend = AerSimulator.from_backend(backend) #AER Simulator#
-            elif self.dev == "real":
-                backend = service.least_busy(operational=True, simulator=False)
-            backend.set_options(
-                max_parallel_threads = 0,
-                max_parallel_experiments = 0,
-                max_parallel_shots = 1,
-                statevector_parallel_threshold = 16,
-            )
-            # Use PennyLane device real/with noisy simulator
-            dev = qml.device('qiskit.remote', 
-                            wires=backend.num_qubits,
-                            backend=backend,
-                            optimization_level=3,
-                            resilience_level=2,
-                            shots=self.n_shots)
-
+            from ibm_cloud_sdk_core.api_exception import ApiException
+            for attempt in range(max_retries):
+                try:
+                    service = QiskitRuntimeService()
+                    if self.dev == "noise_simulator":
+                        # Load fake IBM backend and build noisy simulator
+                        from qiskit_aer import AerSimulator
+                        backend = service.backend("ibm_pittsburgh")
+                        backend = AerSimulator.from_backend(backend) #AER Simulator#
+                    elif self.dev == "real":
+                        backend = service.least_busy(operational=True, simulator=False)
+                    backend.set_options(
+                        max_parallel_threads = 0,
+                        max_parallel_experiments = 0,
+                        max_parallel_shots = 1,
+                        statevector_parallel_threshold = 16,
+                    )
+                    # Use PennyLane device real/with noisy simulator
+                    dev = qml.device('qiskit.remote', 
+                                    wires=backend.num_qubits,
+                                    backend=backend,
+                                    optimization_level=3,
+                                    resilience_level=2,
+                                    shots=self.n_shots)
+                    break  # success, exit retry loop
+                except ApiException as e:
+                    print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] IBM Q call failed (attempt {attempt+1}/{max_retries}): {e}")
+                    time.sleep(retry_delay)
+            else:
+                raise RuntimeError("IBM Q unavailable after retries")
         @qml.qnode(dev, interface="jax")
         def rdm1_qnode(theta):
             self._ansatz(theta, hf_state, qubits)
