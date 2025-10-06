@@ -15,6 +15,7 @@ import psi4
 psi4.core.be_quiet()
 import pynof
 from scipy.linalg import eigh
+from scipy.optimize import minimize
 import re
 import os
 
@@ -22,6 +23,7 @@ import os
 from qiskit_ibm_runtime import QiskitRuntimeService
 from ibm_cloud_sdk_core.api_exception import ApiException
 from qiskit_ibm_runtime.accounts.exceptions import InvalidAccountError
+
 
 jax.config.update("jax_enable_x64", True)
 
@@ -348,8 +350,15 @@ class NOFVQE:
     # Energy minimization
     # =========================
 
-    def _vqe(self, E_fn, params, crds):
-        opt = optax.sgd(learning_rate=0.1)
+    def _vqe_optax(self, E_fn, method, params, crds):
+        # choose optimizer
+        if method == "adam":
+            opt = optax.adam(learning_rate=0.05)
+        elif method == "sgd":
+            opt = optax.sgd(learning_rate=0.1)
+        else:
+            raise ValueError(f"Unknown optax method: {method}")
+        
         opt_state = opt.init(params)
         
         # energy function that depends only on params (geometry fixed)
@@ -391,8 +400,42 @@ class NOFVQE:
             if g_maxabs <= self.conv_tol:
                 break
 
-        return E_history, params_history, rdm1_history, n_history, vecs_history, cj12_history, ck12_history 
+        return E_history, params_history, rdm1_history, n_history, vecs_history, cj12_history, ck12_history
 
+
+    def _vqe_scipy(self, E_fn, method, params, crds):
+        # Define wrappers for scipy
+        def E_scipy(x):
+            E_val, _, _, _, _, _ = E_fn(x, crds)
+            return float(E_val)
+
+        def grad_scipy(x):
+            grad_fn = lambda p: E_fn(p, crds)[0]
+            g = jax.grad(grad_fn)(x)
+            return np.array(g, dtype=float)
+
+        res = minimize(
+            E_scipy,
+            np.array(params),
+            method=method.upper(),
+            jac=grad_scipy,
+            tol=self.conv_tol,
+            options={"maxiter": self.max_iterations},
+        )
+
+        E_val, rdm1_val, n_val, vecs_val, cj12_val, ck12_val = E_fn(res.x, crds)
+        return [E_val], [res.x], [rdm1_val], [n_val], [vecs_val], [cj12_val], [ck12_val]
+
+
+    def _vqe(self, E_fn, params, crds, method="adam"):
+        if method.lower() in ["sgd", "adam"]:
+            return self._vqe_optax(E_fn, method, params, crds)
+        elif method.lower() in ["slsqp", "l-bfgs-b"]:
+            return self._vqe_scipy(E_fn, method, params, crds)
+        else:
+            raise ValueError(
+                f"Optimizer method {method} not implemented. Choose 'adam', 'sgd', 'slsqp', or 'l-bfgs-b'."
+            )
 
     def ene_vqe(self):
         E_history, params_history, rdm1_history, n_history, vecs_history, cj12_history, ck12_history = self._vqe(
