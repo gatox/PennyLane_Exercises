@@ -18,6 +18,11 @@ from scipy.linalg import eigh
 import re
 import os
 
+#The necessary libraries to run on an IBM QC.
+from qiskit_ibm_runtime import QiskitRuntimeService
+from ibm_cloud_sdk_core.api_exception import ApiException
+from qiskit_ibm_runtime.accounts.exceptions import InvalidAccountError
+
 jax.config.update("jax_enable_x64", True)
 
 class NOFVQE:
@@ -211,7 +216,7 @@ class NOFVQE:
         return E_nuc, h_MO, I_MO, n_elec, norb
 
     # ---------- measure 1-RDM on the circuit ----------
-    def _rdm1_from_circuit(self, params, n_elec, norb):
+    def _rdm1_from_circuit(self, params, n_elec, norb, allow_fallback=False):
         max_retries = 10
         retry_delay = 5
         qubits = 2 * norb
@@ -219,19 +224,20 @@ class NOFVQE:
         if self.dev == "simulator":
             dev = qml.device("lightning.qubit", wires=qubits)
         else:
+            # Only initialize IBM service once
+            if not hasattr(self, "_ibm_service"):
+                self._ibm_service = QiskitRuntimeService()
             # Attempt IBM Q with retries
-            from qiskit_ibm_runtime import QiskitRuntimeService
-            from ibm_cloud_sdk_core.api_exception import ApiException
             for attempt in range(max_retries):
                 try:
-                    service = QiskitRuntimeService()
                     if self.dev == "noise_simulator":
                         # Load fake IBM backend and build noisy simulator
                         from qiskit_aer import AerSimulator
-                        backend = service.backend("ibm_pittsburgh")
-                        backend = AerSimulator.from_backend(backend) #AER Simulator#
+                        backend = self._ibm_service.backend("ibm_pittsburgh")
+                        #AER Simulator#
+                        backend = AerSimulator.from_backend(backend) 
                     elif self.dev == "real":
-                        backend = service.least_busy(operational=True, simulator=False)
+                        backend = self._ibm_service.least_busy(operational=True, simulator=False)
                     backend.set_options(
                         max_parallel_threads = 0,
                         max_parallel_experiments = 0,
@@ -246,11 +252,22 @@ class NOFVQE:
                                     resilience_level=2,
                                     shots=self.n_shots)
                     break  # success, exit retry loop
-                except ApiException as e:
+                except (ApiException, InvalidAccountError) as e:
                     print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] IBM Q call failed (attempt {attempt+1}/{max_retries}): {e}")
                     time.sleep(retry_delay)
             else:
-                raise RuntimeError("IBM Q unavailable after retries")
+                if allow_fallback:
+                    print("IBM Q unavailable after retries. Falling back to local AerSimulator.")
+                    from qiskit_aer import AerSimulator
+                    backend = AerSimulator()
+                    dev = qml.device(
+                        "qiskit.aer",
+                        wires=backend.configuration().num_qubits,
+                        backend=backend,
+                        shots=self.n_shots,
+                    )
+                else:
+                    raise RuntimeError("IBM Q unavailable after retries")
         @qml.qnode(dev, interface="jax")
         def rdm1_qnode(theta):
             self._ansatz(theta, hf_state, qubits)
