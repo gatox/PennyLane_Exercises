@@ -108,6 +108,8 @@ class NOFVQE:
                  C_MO=None,
                  dev="simulator",
                  n_shots=None,
+                 optimization_level=None,
+                 resilience_level=None,
                  ):
         self.units, self.charge, self.mul, self.symbols, self.crd, self.mol = self._read_mol(geometry)
         #self.crd = np.array([[self.mol.x(i), self.mol.y(i), self.mol.z(i)] for i in range(self.mol.natom())])
@@ -146,6 +148,8 @@ class NOFVQE:
         self.dev = dev
         if self.dev != "simulator":
             self.n_shots = n_shots
+            self.optimization_level = optimization_level
+            self.resilience_level = resilience_level
 
     # ---------------- Ansatz ----------------
     def _ansatz(self, params, hf_state, qubits):
@@ -239,6 +243,7 @@ class NOFVQE:
                         #AER Simulator#
                         backend = AerSimulator.from_backend(backend) 
                     elif self.dev == "real":
+                        #backend = self._ibm_service.backend("ibm_pittsburgh")
                         backend = self._ibm_service.least_busy(operational=True, simulator=False)
                     backend.set_options(
                         max_parallel_threads = 0,
@@ -250,8 +255,8 @@ class NOFVQE:
                     dev = qml.device('qiskit.remote', 
                                     wires=backend.num_qubits,
                                     backend=backend,
-                                    optimization_level=3,
-                                    resilience_level=2,
+                                    optimization_level=self.optimization_level,
+                                    resilience_level=self.resilience_level,
                                     shots=self.n_shots)
                     break  # success, exit retry loop
                 except (ApiException, InvalidAccountError) as e:
@@ -592,6 +597,8 @@ if __name__ == "__main__":
     C_MO = "guest_C_MO"
     dev="simulator"
     n_shots=10000
+    optimization_level=3,
+    resilience_level=0,
     cal = NOFVQE(
             xyz_file, 
             functional=functional, 
@@ -604,6 +611,8 @@ if __name__ == "__main__":
             C_MO=C_MO,
             dev=dev,
             n_shots=n_shots,
+            optimization_level=optimization_level,
+            resilience_level=resilience_level,
                  )
     # Run VQE
     E_min, params_opt, rdm1_opt, n, vecs, cj12, ck12 = cal.ene_vqe()
