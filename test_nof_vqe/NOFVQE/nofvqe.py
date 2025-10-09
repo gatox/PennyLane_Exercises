@@ -107,6 +107,7 @@ class NOFVQE:
                  d_shift=1e-4,
                  C_MO=None,
                  dev="simulator",
+                 opt_circ="sgd",
                  n_shots=None,
                  optimization_level=None,
                  resilience_level=None,
@@ -150,6 +151,7 @@ class NOFVQE:
             self.n_shots = n_shots
             self.optimization_level = optimization_level
             self.resilience_level = resilience_level
+        self.opt_circ = opt_circ
 
     # ---------------- Ansatz ----------------
     def _ansatz(self, params, hf_state, qubits):
@@ -242,15 +244,15 @@ class NOFVQE:
                         backend = self._ibm_service.backend("ibm_pittsburgh")
                         #AER Simulator#
                         backend = AerSimulator.from_backend(backend) 
-                    elif self.dev == "real":
-                        #backend = self._ibm_service.backend("ibm_pittsburgh")
-                        backend = self._ibm_service.least_busy(operational=True, simulator=False)
-                    backend.set_options(
+                        backend.set_options(
                         max_parallel_threads = 0,
                         max_parallel_experiments = 0,
                         max_parallel_shots = 1,
                         statevector_parallel_threshold = 16,
-                    )
+                        )
+                    elif self.dev == "real":
+                        #backend = self._ibm_service.backend("ibm_pittsburgh")
+                        backend = self._ibm_service.least_busy(operational=True, simulator=False)
                     # Use PennyLane device real/with noisy simulator
                     dev = qml.device('qiskit.remote', 
                                     wires=backend.num_qubits,
@@ -432,7 +434,8 @@ class NOFVQE:
         return [E_val], [res.x], [rdm1_val], [n_val], [vecs_val], [cj12_val], [ck12_val]
 
 
-    def _vqe(self, E_fn, params, crds, method="adam"):
+    def _vqe(self, E_fn, params, crds):
+        method=self.opt_circ
         if method.lower() in ["sgd", "adam"]:
             return self._vqe_optax(E_fn, method, params, crds)
         elif method.lower() in ["slsqp", "l-bfgs-b"]:
@@ -596,6 +599,7 @@ if __name__ == "__main__":
     d_shift=1e-4
     C_MO = "guest_C_MO"
     dev="simulator"
+    opt_circ="sgd"
     n_shots=10000
     optimization_level=3,
     resilience_level=0,
@@ -606,6 +610,7 @@ if __name__ == "__main__":
             init_param=init_param, 
             basis=basis, 
             max_iterations=max_iterations,
+            opt_circ=opt_circ,
             gradient=gradient,
             d_shift=d_shift,
             C_MO=C_MO,
