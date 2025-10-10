@@ -73,7 +73,7 @@ class NOFVQE:
 
     @staticmethod
     def _get_no_on(rdm1, norb):
-    
+
         rdm1_aa = jnp.zeros((norb, norb))
     
         i = -1
@@ -282,7 +282,13 @@ class NOFVQE:
             self._ansatz(theta, hf_state, qubits)
             return [qml.expval(op) for op in self._build_rdm1_ops(norb)]
 
-        return jnp.array(rdm1_qnode(params))
+        rdm1 = jnp.array(rdm1_qnode(params))
+
+        # Flatten rdm1 if using SLSQP or L-BFGS-B
+        if self.opt_circ in ["slsqp", "l-bfgs-b"]:
+            rdm1 = rdm1.flatten()
+        
+        return rdm1
 
     def ene_pnof4(self, params, crds, rdm1=None):
         # Functions based on 1-RDM (J. Chem. Theory Comput. 2025, 21, 5, 2402–2413) and taked from the following repository:
@@ -413,10 +419,12 @@ class NOFVQE:
     def _vqe_scipy(self, E_fn, method, params, crds):
         # Define wrappers for scipy
         def E_scipy(x):
+            x = jnp.array(x)  # ensure JAX array
             E_val, _, _, _, _, _ = E_fn(x, crds)
             return float(E_val)
 
         def grad_scipy(x):
+            x = jnp.array(x)  # ensure JAX array
             grad_fn = lambda p: E_fn(p, crds)[0]
             g = jax.grad(grad_fn)(x)
             return np.array(g, dtype=float)
@@ -430,7 +438,7 @@ class NOFVQE:
             options={"maxiter": self.max_iterations},
         )
 
-        E_val, rdm1_val, n_val, vecs_val, cj12_val, ck12_val = E_fn(res.x, crds)
+        E_val, rdm1_val, n_val, vecs_val, cj12_val, ck12_val = E_fn(jnp.array(res.x), crds)
         return [E_val], [res.x], [rdm1_val], [n_val], [vecs_val], [cj12_val], [ck12_val]
 
 
