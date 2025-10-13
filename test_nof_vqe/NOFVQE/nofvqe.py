@@ -373,11 +373,9 @@ class NOFVQE:
                     alpha=0.602, 
                     gamma=0.101, 
                     c=0.2, 
-                    A=None, 
+                    A=0, 
                     a=None
                     )
-        elif method == "qnspsa":
-            opt = qml.QNSPSAOptimizer(stepsize=5e-2)
         else:
             raise ValueError(f"Unknown optax method: {method}")
         E_history = []
@@ -490,11 +488,11 @@ class NOFVQE:
             return self._vqe_optax(E_fn, method, params, crds)
         elif method.lower() in ["slsqp", "l-bfgs-b"]:
             return self._vqe_opt_scipy(E_fn, method, params, crds)
-        elif method.lower() in ["spsa", "qnspsa"]:
+        elif method == "spsa":
             return self._vqe_opt_pennylane(E_fn, method, params, crds)
         else:
             raise ValueError(
-                f"Optimizer method {method} not implemented. Choose: 'adam', 'sgd', 'spsa', 'qnspsa', 'sgd', 'slsqp', or 'l-bfgs-b'."
+                f"Optimizer method {method} not implemented. Choose: 'adam', 'sgd', 'spsa', 'sgd', 'slsqp', or 'l-bfgs-b'."
             )
 
     def ene_vqe(self):
