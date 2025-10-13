@@ -360,8 +360,47 @@ class NOFVQE:
         return E_nuc + E1 + E2, rdm1, n, vecs, cj12, ck12
 
     # =========================
-    # Energy minimization
+    # Circuit optimizers
     # =========================
+
+    def _vqe_opt_pennylane(self, E_fn, method, params, crds):
+        # Choose optimizer
+        # The selected hyperparameters are Pennylane's default.
+        if method == "spsa":
+            
+            opt = qml.SPSAOptimizer(
+                    maxiter=self.max_iterations, 
+                    alpha=0.602, 
+                    gamma=0.101, 
+                    c=0.2, 
+                    A=None, 
+                    a=None
+                    )
+        elif method == "qnspsa":
+            opt = qml.QNSPSAOptimizer(stepsize=5e-2)
+        else:
+            raise ValueError(f"Unknown optax method: {method}")
+        E_history = []
+        params_history = []
+
+        def cost_fn(p):
+            E_val, _, _, _, _, _ = E_fn(p, crds)
+            return E_val
+        
+        for n in range(self.max_iterations):
+            params, E_val = opt.step_and_cost(cost_fn, params)
+            E_history.append(E_val)
+            params_history.append(params)
+
+            print(f"SPSA Step {n}: Energy = {E_val:.8f}")
+
+            if n > 0 and abs(E_history[-1] - E_history[-2]) < self.conv_tol:
+                break
+
+        # Evaluate final rdm1 and other quantities
+        _, rdm1_val, n_val, vecs_val, cj12_val, ck12_val = E_fn(params, crds)
+        return E_history, params_history, [rdm1_val], [n_val], [vecs_val], [cj12_val], [ck12_val]
+
 
     def _vqe_optax(self, E_fn, method, params, crds):
         # choose optimizer
@@ -416,7 +455,7 @@ class NOFVQE:
         return E_history, params_history, rdm1_history, n_history, vecs_history, cj12_history, ck12_history
 
 
-    def _vqe_scipy(self, E_fn, method, params, crds):
+    def _vqe_opt_scipy(self, E_fn, method, params, crds):
         # Define wrappers for scipy
         def E_scipy(x):
             x = jnp.array(x)  # ensure JAX array
@@ -440,17 +479,22 @@ class NOFVQE:
 
         E_val, rdm1_val, n_val, vecs_val, cj12_val, ck12_val = E_fn(jnp.array(res.x), crds)
         return [E_val], [res.x], [rdm1_val], [n_val], [vecs_val], [cj12_val], [ck12_val]
-
+    
+    # =========================
+    # Energy minimization
+    # =========================
 
     def _vqe(self, E_fn, params, crds):
         method=self.opt_circ
         if method.lower() in ["sgd", "adam"]:
             return self._vqe_optax(E_fn, method, params, crds)
         elif method.lower() in ["slsqp", "l-bfgs-b"]:
-            return self._vqe_scipy(E_fn, method, params, crds)
+            return self._vqe_opt_scipy(E_fn, method, params, crds)
+        elif method.lower() in ["spsa", "qnspsa"]:
+            return self._vqe_opt_pennylane(E_fn, method, params, crds)
         else:
             raise ValueError(
-                f"Optimizer method {method} not implemented. Choose 'adam', 'sgd', 'slsqp', or 'l-bfgs-b'."
+                f"Optimizer method {method} not implemented. Choose: 'adam', 'sgd', 'spsa', 'qnspsa', 'sgd', 'slsqp', or 'l-bfgs-b'."
             )
 
     def ene_vqe(self):
