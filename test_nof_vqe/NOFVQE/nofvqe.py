@@ -459,18 +459,23 @@ class NOFVQE:
             x = jnp.array(x)  # ensure JAX array
             E_val, _, _, _, _, _ = E_fn(x, crds)
             return float(E_val)
-
-        def grad_scipy(x):
-            x = jnp.array(x)  # ensure JAX array
-            grad_fn = lambda p: E_fn(p, crds)[0]
-            g = jax.grad(grad_fn)(x)
-            return np.array(g, dtype=float)
+        
+        #COBYLA optimizer doesn't support jacobian
+        if method.lower() in ["slsqp", "l-bfgs-b"]:
+            def grad_scipy(x):
+                x = jnp.array(x)  # ensure JAX array
+                grad_fn = lambda p: E_fn(p, crds)[0]
+                g = jax.grad(grad_fn)(x)
+                return np.array(g, dtype=float)
+            jac = grad_scipy
+        else:
+            jac = None  # COBYLA doesn't use gradients
 
         res = minimize(
             E_scipy,
             np.array(params),
             method=method.upper(),
-            jac=grad_scipy,
+            jac=jac,
             tol=self.conv_tol,
             options={"maxiter": self.max_iterations},
         )
@@ -486,7 +491,7 @@ class NOFVQE:
         method=self.opt_circ
         if method.lower() in ["sgd", "adam"]:
             return self._vqe_optax(E_fn, method, params, crds)
-        elif method.lower() in ["slsqp", "l-bfgs-b"]:
+        elif method.lower() in ["slsqp", "l-bfgs-b", "cobyla"]:
             return self._vqe_opt_scipy(E_fn, method, params, crds)
         elif method == "spsa":
             return self._vqe_opt_pennylane(E_fn, method, params, crds)
