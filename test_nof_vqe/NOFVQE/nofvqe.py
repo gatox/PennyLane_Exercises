@@ -285,7 +285,7 @@ class NOFVQE:
         rdm1 = jnp.array(rdm1_qnode(params))
 
         # Flatten rdm1 if using SLSQP or L-BFGS-B
-        if self.opt_circ in ["slsqp", "l-bfgs-b"]:
+        if self.opt_circ in ["slsqp", "l-bfgs-b", "cobyla"]:
             rdm1 = rdm1.flatten()
         
         return rdm1
