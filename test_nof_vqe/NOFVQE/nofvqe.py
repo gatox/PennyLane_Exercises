@@ -80,8 +80,9 @@ class NOFVQE:
         for p in range(0, norb):
             for q in range(p, norb):
                 i = i + 1
-                rdm1_aa = rdm1_aa.at[p, q].set(rdm1[i])
-                rdm1_aa = rdm1_aa.at[q, p].set(rdm1[i])
+                val = jnp.squeeze(rdm1[i])
+                rdm1_aa = rdm1_aa.at[p, q].set(val)
+                rdm1_aa = rdm1_aa.at[q, p].set(val)
     
         n, vecs = jnp.linalg.eigh(rdm1_aa)
     
@@ -142,10 +143,13 @@ class NOFVQE:
         self.b_mnl = None
         self.C = None
         if self.gradient == "analytics" and C_MO == "guest_C_MO":
-            print("reading C_MO guest")
+            print("searching for C_MO guest")
             file = "pynof_C.npy"
             if os.path.exists(file):
+                print("reading C_MO guest")
                 self.C = pynof.read_C(self.p.title)
+            else:
+                print("No C_MO guest, then C_MO=None")
         self.dev = dev
         if self.dev != "simulator":
             self.n_shots = n_shots
@@ -487,8 +491,9 @@ class NOFVQE:
     # Energy minimization
     # =========================
 
-    def _vqe(self, E_fn, params, crds):
-        method=self.opt_circ
+    def _vqe(self, E_fn, params, crds, method=None):
+        if method is None:
+            method=self.opt_circ
         if method.lower() in ["sgd", "adam"]:
             return self._vqe_optax(E_fn, method, params, crds)
         elif method.lower() in ["slsqp", "l-bfgs-b", "cobyla"]:
@@ -645,7 +650,7 @@ class NOFVQE:
 if __name__ == "__main__":
     xyz_file = "h2_bohr.xyz"
     functional="PNOF4"
-    conv_tol=1e-1
+    conv_tol=1e-2
     init_param=0.1
     basis='sto-3g'
     max_iterations=500
@@ -658,25 +663,109 @@ if __name__ == "__main__":
     n_shots=10000
     optimization_level=3,
     resilience_level=0,
-    cal = NOFVQE(
-            xyz_file, 
-            functional=functional, 
-            conv_tol=conv_tol, 
-            init_param=init_param, 
-            basis=basis, 
-            max_iterations=max_iterations,
-            opt_circ=opt_circ,
-            gradient=gradient,
-            d_shift=d_shift,
-            C_MO=C_MO,
-            dev=dev,
-            n_shots=n_shots,
-            optimization_level=optimization_level,
-            resilience_level=resilience_level,
-                 )
+    # cal = NOFVQE(
+    #         xyz_file, 
+    #         functional=functional, 
+    #         conv_tol=conv_tol, 
+    #         init_param=init_param, 
+    #         basis=basis, 
+    #         max_iterations=max_iterations,
+    #         opt_circ=opt_circ,
+    #         gradient=gradient,
+    #         d_shift=d_shift,
+    #         C_MO=C_MO,
+    #         dev=dev,
+    #         n_shots=n_shots,
+    #         optimization_level=optimization_level,
+    #         resilience_level=resilience_level,
+    #              )
+    # Call functional
+    # crds = cal.crd 
     # Run VQE
-    E_min, params_opt, rdm1_opt, n, vecs, cj12, ck12 = cal.ene_vqe()
-    print("Min Ene VQE and param:", E_min, params_opt)
-    # Nuclear gradient
-    grad = cal.grad()
-    print(f"Nuclear gradient ({gradient}):\n", grad)    
+    #E_h, params_h, rdm1_h, n_h, vecs_h, cj12_h, ck12_h=cal._vqe(cal.ene_pnof4, init_param, crds, method="adam")
+    # # Run NOF-VQE
+    # E_min, params_opt, rdm1_opt, n, vecs, cj12, ck12 = cal.ene_vqe()
+    # print("Min Ene VQE and param:", E_min, params_opt)
+    # # Nuclear gradient
+    # grad = cal.grad()
+    # print(f"Nuclear gradient ({gradient}):\n", grad)  
+    optimizers = ["adam", "sgd", "slsqp", "l-bfgs-b", "cobyla", "spsa"]
+    results = {}
+
+    for opt_method in optimizers:
+        print(f"\n=== Testing {opt_method.upper()} ===")
+        
+        cal = NOFVQE(
+        xyz_file,
+        functional=functional,
+        conv_tol=conv_tol,
+        init_param=init_param,
+        basis=basis,
+        max_iterations=max_iterations,
+        opt_circ=opt_method,     # use method here
+        gradient=gradient,
+        d_shift=d_shift,
+        C_MO=C_MO,
+        dev=dev,
+        n_shots=n_shots,
+        optimization_level=optimization_level,
+        resilience_level=resilience_level,
+        )
+        crds = cal.crd 
+        start_time = time.time()
+        E_hist, params_hist, *_ = cal._vqe(cal.ene_pnof4, init_param, crds, method=opt_method)
+        runtime = time.time() - start_time
+
+        results[opt_method] = {
+            "final_energy": E_hist[-1],
+            "iterations": len(E_hist),
+            "time_sec": runtime,
+            "E_hist": E_hist,  # <--- added
+        }
+        if os.path.exists("pynof_C.npy"):
+            os.remove("pynof_C.npy")
+
+
+    # Display results
+    for k, v in results.items():
+        print(f"{k.upper():10s}: E = {v['final_energy']:.6f}, "
+            f"iters = {v['iterations']}, time = {v['time_sec']:.2f}s")
+        
+    import matplotlib.pyplot as plt
+
+    plt.figure(figsize=(8, 6))
+
+    max_iters = max(len(results[opt]["E_hist"]) for opt in optimizers if "E_hist" in results[opt])
+
+    for opt_method in optimizers:
+        if "E_hist" in results[opt_method]:
+            plt.plot(results[opt_method]["E_hist"], label=opt_method.upper())
+
+    # Add FCI reference line across the full range
+    plt.hlines(
+        -1.137270174657105,
+        0,
+        max_iters,
+        color="red",
+        linestyle="--",
+        linewidth=1.5,
+        label="FCI"
+    )
+
+    plt.xlabel("Iteration")
+    plt.ylabel("Energy (Hartree)")
+    plt.title("NOF-VQE Optimizer Performance Comparison", y=1.2)
+    plt.legend(
+        loc='upper center',
+        bbox_to_anchor=(0.5, 1.19),
+        prop={'size': 12},
+        ncol=4,
+        frameon=False
+    )
+    plt.grid(True, linestyle="--", alpha=0.5)
+    plt.tight_layout()
+    plt.savefig("energy_opt_circ.pdf", bbox_inches="tight")
+    plt.close()
+
+
+     
