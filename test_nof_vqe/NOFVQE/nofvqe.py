@@ -229,7 +229,7 @@ class NOFVQE:
         return E_nuc, h_MO, I_MO, n_elec, norb
 
     # ---------- measure 1-RDM on the circuit ----------
-    def _rdm1_from_circuit(self, params, n_elec, norb, allow_fallback=False):
+    def _rdm1_from_circuit(self, params, n_elec, norb, region="eu-de", allow_fallback=False):
         max_retries = 10
         retry_delay = 5
         qubits = 2 * norb
@@ -239,7 +239,12 @@ class NOFVQE:
         else:
             # Only initialize IBM service once
             if not hasattr(self, "_ibm_service"):
-                self._ibm_service = QiskitRuntimeService()
+                if region == "eu-de":
+                    self._ibm_service = QiskitRuntimeService(name="eu-de-ibm-quantum-platform")
+                elif region == "us-east":
+                    self._ibm_service = QiskitRuntimeService() # default (us-east)
+                else:
+                    raise RuntimeError("Unsupported region")
             # Attempt IBM Q with retries
             for attempt in range(max_retries):
                 try:
