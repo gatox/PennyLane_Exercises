@@ -18,6 +18,7 @@ from scipy.linalg import eigh
 from scipy.optimize import minimize
 import re
 import os
+import cma
 
 #The necessary libraries to run on an IBM QC.
 from qiskit_ibm_runtime import QiskitRuntimeService
@@ -368,6 +369,7 @@ class NOFVQE:
     # =========================
 
     def _vqe_opt_pennylane(self, E_fn, method, params, crds):
+        """VQE optimization using SPSA"""
         # Choose optimizer
         # The selected hyperparameters are Pennylane's default.
         if method == "spsa":
@@ -376,9 +378,9 @@ class NOFVQE:
                     maxiter=self.max_iterations, 
                     alpha=0.602, 
                     gamma=0.101, 
-                    c=0.2, 
-                    A=0, 
-                    a=None
+                    c=0.05, 
+                    A=10, 
+                    a=0.1
                     )
         else:
             raise ValueError(f"Unknown optax method: {method}")
@@ -405,6 +407,10 @@ class NOFVQE:
 
 
     def _vqe_optax(self, E_fn, method, params, crds):
+        """
+        VQE optimization using:
+            SGD and ADAM
+        """
         # choose optimizer
         if method == "adam":
             opt = optax.adam(learning_rate=0.05)
@@ -458,6 +464,10 @@ class NOFVQE:
 
 
     def _vqe_opt_scipy(self, E_fn, method, params, crds):
+        """
+        VQE optimization using:
+            SLSQP, L-BFGS-B and COBYLA
+        """
         # Define wrappers for scipy
         def E_scipy(x):
             x = jnp.array(x)  # ensure JAX array
@@ -487,6 +497,46 @@ class NOFVQE:
         E_val, rdm1_val, n_val, vecs_val, cj12_val, ck12_val = E_fn(jnp.array(res.x), crds)
         return [E_val], [res.x], [rdm1_val], [n_val], [vecs_val], [cj12_val], [ck12_val]
     
+    def _vqe_cmaes(self, E_fn, params, crds):
+        """VQE optimization using CMA-ES."""
+        
+        # --- Ensure params are 1D ---
+        params = np.atleast_1d(np.array(params, dtype=float)).flatten()
+        
+        # Define cost function (energy only)
+        def cost_fn(p):
+            E_val, _, _, _, _, _ = E_fn(np.array(p), crds)
+            return float(E_val)
+        
+        # Initial standard deviation (step size)
+        sigma0 = 0.1  
+        
+        # Initialize CMA-ES optimizer
+        es = cma.CMAEvolutionStrategy(np.array(params), sigma0, {'maxiter': self.max_iterations})
+        
+        E_history = []
+        params_history = []
+        
+        while not es.stop():
+            solutions = es.ask()
+            energies = [cost_fn(s) for s in solutions]
+            es.tell(solutions, energies)
+            es.disp()
+            
+            # Track best
+            best_energy = min(energies)
+            best_params = solutions[np.argmin(energies)]
+            E_history.append(best_energy)
+            params_history.append(best_params)
+            
+            # Convergence check
+            if len(E_history) > 1 and abs(E_history[-1] - E_history[-2]) < self.conv_tol:
+                break
+        
+        # Final evaluation
+        _, rdm1_val, n_val, vecs_val, cj12_val, ck12_val = E_fn(best_params, crds)
+        return E_history, params_history, [rdm1_val], [n_val], [vecs_val], [cj12_val], [ck12_val]
+    
     # =========================
     # Energy minimization
     # =========================
@@ -500,6 +550,8 @@ class NOFVQE:
             return self._vqe_opt_scipy(E_fn, method, params, crds)
         elif method == "spsa":
             return self._vqe_opt_pennylane(E_fn, method, params, crds)
+        elif method == "cmaes":
+            return self._vqe_cmaes(E_fn, params, crds)
         else:
             raise ValueError(
                 f"Optimizer method {method} not implemented. Choose: 'adam', 'sgd', 'spsa', 'sgd', 'slsqp', or 'l-bfgs-b'."
@@ -650,11 +702,10 @@ class NOFVQE:
 if __name__ == "__main__":
     xyz_file = "h2_bohr.xyz"
     functional="PNOF4"
-    conv_tol=1e-2
+    conv_tol=1e-7
     init_param=0.1
     basis='sto-3g'
     max_iterations=500
-    #gradient="df_fedorov"
     gradient="analytics"
     d_shift=1e-4
     C_MO = "guest_C_MO"
@@ -663,109 +714,28 @@ if __name__ == "__main__":
     n_shots=10000
     optimization_level=3,
     resilience_level=0,
-    # cal = NOFVQE(
-    #         xyz_file, 
-    #         functional=functional, 
-    #         conv_tol=conv_tol, 
-    #         init_param=init_param, 
-    #         basis=basis, 
-    #         max_iterations=max_iterations,
-    #         opt_circ=opt_circ,
-    #         gradient=gradient,
-    #         d_shift=d_shift,
-    #         C_MO=C_MO,
-    #         dev=dev,
-    #         n_shots=n_shots,
-    #         optimization_level=optimization_level,
-    #         resilience_level=resilience_level,
-    #              )
-    # Call functional
-    # crds = cal.crd 
-    # Run VQE
-    #E_h, params_h, rdm1_h, n_h, vecs_h, cj12_h, ck12_h=cal._vqe(cal.ene_pnof4, init_param, crds, method="adam")
+    cal = NOFVQE(
+            xyz_file, 
+            functional=functional, 
+            conv_tol=conv_tol, 
+            init_param=init_param, 
+            basis=basis, 
+            max_iterations=max_iterations,
+            opt_circ=opt_circ,
+            gradient=gradient,
+            d_shift=d_shift,
+            C_MO=C_MO,
+            dev=dev,
+            n_shots=n_shots,
+            optimization_level=optimization_level,
+            resilience_level=resilience_level,
+                 )
+    crds = cal.crd 
+    # # Run VQE
+    E_h, params_h, rdm1_h, n_h, vecs_h, cj12_h, ck12_h=cal._vqe(cal.ene_pnof4, init_param, crds, method="adam")
     # # Run NOF-VQE
     # E_min, params_opt, rdm1_opt, n, vecs, cj12, ck12 = cal.ene_vqe()
     # print("Min Ene VQE and param:", E_min, params_opt)
     # # Nuclear gradient
     # grad = cal.grad()
     # print(f"Nuclear gradient ({gradient}):\n", grad)  
-    optimizers = ["adam", "sgd", "slsqp", "l-bfgs-b", "cobyla", "spsa"]
-    results = {}
-
-    for opt_method in optimizers:
-        print(f"\n=== Testing {opt_method.upper()} ===")
-        
-        cal = NOFVQE(
-        xyz_file,
-        functional=functional,
-        conv_tol=conv_tol,
-        init_param=init_param,
-        basis=basis,
-        max_iterations=max_iterations,
-        opt_circ=opt_method,     # use method here
-        gradient=gradient,
-        d_shift=d_shift,
-        C_MO=C_MO,
-        dev=dev,
-        n_shots=n_shots,
-        optimization_level=optimization_level,
-        resilience_level=resilience_level,
-        )
-        crds = cal.crd 
-        start_time = time.time()
-        E_hist, params_hist, *_ = cal._vqe(cal.ene_pnof4, init_param, crds, method=opt_method)
-        runtime = time.time() - start_time
-
-        results[opt_method] = {
-            "final_energy": E_hist[-1],
-            "iterations": len(E_hist),
-            "time_sec": runtime,
-            "E_hist": E_hist,  # <--- added
-        }
-        if os.path.exists("pynof_C.npy"):
-            os.remove("pynof_C.npy")
-
-
-    # Display results
-    for k, v in results.items():
-        print(f"{k.upper():10s}: E = {v['final_energy']:.6f}, "
-            f"iters = {v['iterations']}, time = {v['time_sec']:.2f}s")
-        
-    import matplotlib.pyplot as plt
-
-    plt.figure(figsize=(8, 6))
-
-    max_iters = max(len(results[opt]["E_hist"]) for opt in optimizers if "E_hist" in results[opt])
-
-    for opt_method in optimizers:
-        if "E_hist" in results[opt_method]:
-            plt.plot(results[opt_method]["E_hist"], label=opt_method.upper())
-
-    # Add FCI reference line across the full range
-    plt.hlines(
-        -1.137270174657105,
-        0,
-        max_iters,
-        color="red",
-        linestyle="--",
-        linewidth=1.5,
-        label="FCI"
-    )
-
-    plt.xlabel("Iteration")
-    plt.ylabel("Energy (Hartree)")
-    plt.title("NOF-VQE Optimizer Performance Comparison", y=1.2)
-    plt.legend(
-        loc='upper center',
-        bbox_to_anchor=(0.5, 1.19),
-        prop={'size': 12},
-        ncol=4,
-        frameon=False
-    )
-    plt.grid(True, linestyle="--", alpha=0.5)
-    plt.tight_layout()
-    plt.savefig("energy_opt_circ.pdf", bbox_inches="tight")
-    plt.close()
-
-
-     
