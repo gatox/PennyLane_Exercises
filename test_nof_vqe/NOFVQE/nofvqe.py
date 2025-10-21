@@ -244,7 +244,7 @@ class NOFVQE:
                 elif region == "us-east":
                     self._ibm_service = QiskitRuntimeService() # default (us-east)
                 else:
-                    raise RuntimeError("Unsupported region")
+                    raise RuntimeError(f"Unsupported region: {region}")
             # Attempt IBM Q with retries
             for attempt in range(max_retries):
                 try:
@@ -261,8 +261,11 @@ class NOFVQE:
                         statevector_parallel_threshold = 16,
                         )
                     elif self.dev == "real":
-                        #backend = self._ibm_service.backend("ibm_pittsburgh")
-                        backend = self._ibm_service.least_busy(operational=True, simulator=False)
+                        # Choose explicitly if region has only one backend
+                        if region == "eu-de":
+                            backend = self._ibm_service.backend("ibm_basquecountry")
+                        else:
+                            backend = self._ibm_service.least_busy(operational=True, simulator=False)
                     # Use PennyLane device real/with noisy simulator
                     dev = qml.device('qiskit.remote', 
                                     wires=backend.num_qubits,
@@ -383,9 +386,9 @@ class NOFVQE:
                     maxiter=self.max_iterations, 
                     alpha=0.602, 
                     gamma=0.101, 
-                    c=0.05, 
+                    c=0.15, 
                     A=10, 
-                    a=0.1
+                    a=0.2
                     )
         else:
             raise ValueError(f"Unknown optax method: {method}")
