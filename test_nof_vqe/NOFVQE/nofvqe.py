@@ -21,7 +21,7 @@ import os
 import cma
 
 #The necessary libraries to run on an IBM QC.
-from qiskit_ibm_runtime import QiskitRuntimeService
+from qiskit_ibm_runtime import QiskitRuntimeService, Session
 from ibm_cloud_sdk_core.api_exception import ApiException
 from qiskit_ibm_runtime.accounts.exceptions import InvalidAccountError
 
@@ -265,7 +265,7 @@ class NOFVQE:
                         if region == "eu-de":
                             backend = self._ibm_service.backend("ibm_basquecountry")
                         else:
-                            backend = self._ibm_service.least_busy(operational=True, simulator=False)
+                            backend = self._ibm_service.least_busy(operational=True, simulator=False, system="heron2")
                     # Use PennyLane device real/with noisy simulator
                     dev = qml.device('qiskit.remote', 
                                     wires=backend.num_qubits,
