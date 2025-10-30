@@ -718,7 +718,7 @@ if __name__ == "__main__":
     d_shift=1e-4
     C_MO = "guest_C_MO"
     dev="simulator"
-    opt_circ="sgd"
+    opt_circ="slsqp"
     n_shots=10000
     optimization_level=3,
     resilience_level=0,
@@ -738,12 +738,12 @@ if __name__ == "__main__":
             optimization_level=optimization_level,
             resilience_level=resilience_level,
                  )
-    crds = cal.crd 
+    #crds = cal.crd 
     # # Run VQE
-    E_h, params_h, rdm1_h, n_h, vecs_h, cj12_h, ck12_h=cal._vqe(cal.ene_pnof4, init_param, crds, method="adam")
-    # # Run NOF-VQE
-    # E_min, params_opt, rdm1_opt, n, vecs, cj12, ck12 = cal.ene_vqe()
-    # print("Min Ene VQE and param:", E_min, params_opt)
-    # # Nuclear gradient
-    # grad = cal.grad()
-    # print(f"Nuclear gradient ({gradient}):\n", grad)  
+    #E_h, params_h, rdm1_h, n_h, vecs_h, cj12_h, ck12_h=cal._vqe(cal.ene_pnof4, init_param, crds, method="adam")
+    # Run NOF-VQE
+    E_min, params_opt, rdm1_opt, n, vecs, cj12, ck12 = cal.ene_vqe()
+    print("Min Ene VQE and param:", E_min, params_opt)
+    # Nuclear gradient
+    grad = cal.grad()
+    print(f"Nuclear gradient ({gradient}):\n", grad)  
