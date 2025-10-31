@@ -234,7 +234,7 @@ class NOFVQE:
         retry_delay = 5
         qubits = 2 * norb
         hf_state = [1] * n_elec + [0] * (qubits - n_elec)
-        if self.dev == "simulator":
+        if self.dev in ["simulator","hybrid"]:
             dev = qml.device("lightning.qubit", wires=qubits)
         else:
             # Only initialize IBM service once
@@ -376,14 +376,14 @@ class NOFVQE:
     # Circuit optimizers
     # =========================
 
-    def _vqe_opt_pennylane(self, E_fn, method, params, crds):
+    def _vqe_opt_pennylane(self, E_fn, method, params, crds, max_iterations):
         """VQE optimization using SPSA"""
         # Choose optimizer
         # The selected hyperparameters are Pennylane's default.
         if method == "spsa":
             
             opt = qml.SPSAOptimizer(
-                    maxiter=self.max_iterations, 
+                    maxiter=max_iterations, 
                     alpha=0.602, 
                     gamma=0.101, 
                     c=0.15, 
@@ -399,7 +399,7 @@ class NOFVQE:
             E_val, _, _, _, _, _ = E_fn(p, crds)
             return E_val
         
-        for n in range(self.max_iterations):
+        for n in range(max_iterations):
             params, E_val = opt.step_and_cost(cost_fn, params)
             E_history.append(E_val)
             params_history.append(params)
@@ -414,7 +414,7 @@ class NOFVQE:
         return E_history, params_history, [rdm1_val], [n_val], [vecs_val], [cj12_val], [ck12_val]
 
 
-    def _vqe_optax(self, E_fn, method, params, crds):
+    def _vqe_optax(self, E_fn, method, params, crds, max_iterations):
         """
         VQE optimization using:
             SGD and ADAM
@@ -442,7 +442,7 @@ class NOFVQE:
         cj12_history = [cj12]
         ck12_history = [ck12]
         
-        for it in range(self.max_iterations):
+        for it in range(max_iterations):
         
             # gradient only w.r.t. params, so we take the first component (energy)
             grad_fn = lambda p: E_fn(p, crds)[0]
@@ -471,7 +471,7 @@ class NOFVQE:
         return E_history, params_history, rdm1_history, n_history, vecs_history, cj12_history, ck12_history
 
 
-    def _vqe_opt_scipy(self, E_fn, method, params, crds):
+    def _vqe_opt_scipy(self, E_fn, method, params, crds, max_iterations):
         """
         VQE optimization using:
             SLSQP, L-BFGS-B and COBYLA
@@ -499,13 +499,13 @@ class NOFVQE:
             method=method.upper(),
             jac=jac,
             tol=self.conv_tol,
-            options={"maxiter": self.max_iterations},
+            options={"maxiter": max_iterations},
         )
 
         E_val, rdm1_val, n_val, vecs_val, cj12_val, ck12_val = E_fn(jnp.array(res.x), crds)
         return [E_val], [res.x], [rdm1_val], [n_val], [vecs_val], [cj12_val], [ck12_val]
     
-    def _vqe_cmaes(self, E_fn, params, crds):
+    def _vqe_cmaes(self, E_fn, params, crds, max_iterations):
         """VQE optimization using CMA-ES."""
         
         # --- Ensure params are 1D ---
@@ -520,7 +520,7 @@ class NOFVQE:
         sigma0 = 0.1  
         
         # Initialize CMA-ES optimizer
-        es = cma.CMAEvolutionStrategy(np.array(params), sigma0, {'maxiter': self.max_iterations})
+        es = cma.CMAEvolutionStrategy(np.array(params), sigma0, {'maxiter': max_iterations})
         
         E_history = []
         params_history = []
@@ -549,17 +549,19 @@ class NOFVQE:
     # Energy minimization
     # =========================
 
-    def _vqe(self, E_fn, params, crds, method=None):
+    def _vqe(self, E_fn, params, crds, method=None, max_iterations=None):
         if method is None:
             method=self.opt_circ
+        if max_iterations is None:
+            max_iterations = self.max_iterations
         if method.lower() in ["sgd", "adam"]:
-            return self._vqe_optax(E_fn, method, params, crds)
+            return self._vqe_optax(E_fn, method, params, crds, max_iterations)
         elif method.lower() in ["slsqp", "l-bfgs-b", "cobyla"]:
-            return self._vqe_opt_scipy(E_fn, method, params, crds)
+            return self._vqe_opt_scipy(E_fn, method, params, crds, max_iterations)
         elif method == "spsa":
-            return self._vqe_opt_pennylane(E_fn, method, params, crds)
+            return self._vqe_opt_pennylane(E_fn, method, params, crds, max_iterations)
         elif method == "cmaes":
-            return self._vqe_cmaes(E_fn, params, crds)
+            return self._vqe_cmaes(E_fn, params, crds, max_iterations)
         else:
             raise ValueError(
                 f"Optimizer method {method} not implemented. Choose: 'adam', 'sgd', 'spsa', 'sgd', 'slsqp', or 'l-bfgs-b'."
@@ -575,7 +577,21 @@ class NOFVQE:
         self.opt_vecs = vecs_history[-1]
         self.opt_cj12 = cj12_history[-1]
         self.opt_ck12 = ck12_history[-1]
-        return E_history[-1], params_history[-1], rdm1_history[-1], n_history[-1], vecs_history[-1], cj12_history[-1], ck12_history[-1]
+        if self.dev != "hybrid":
+            return E_history[-1], params_history[-1], rdm1_history[-1], n_history[-1], vecs_history[-1], cj12_history[-1], ck12_history[-1]
+        else:
+            self.dev_old = self.dev
+            self.dev = "real"
+            E_hybrid, params_hybrid, rdm1_hybrid, n_hybrid, vecs_hybrid, cj12_hybrid, ck12_hybrid = self._vqe(
+                self.ene_pnof4, self.opt_param, self.crd, max_iterations=1)
+            self.dev = self.dev_old
+            self.opt_param = params_hybrid[-1]
+            self.opt_rdm1 = rdm1_hybrid[-1]
+            self.opt_n = n_hybrid[-1]
+            self.opt_vecs = vecs_hybrid[-1]
+            self.opt_cj12 = cj12_hybrid[-1]
+            self.opt_ck12 = ck12_hybrid[-1]
+            return E_hybrid[-1], params_hybrid[-1], rdm1_hybrid[-1], n_hybrid[-1], vecs_hybrid[-1], cj12_hybrid[-1], ck12_hybrid[-1]
 
     def _nuclear_gradient_dff_fedorov(self, params, crds, rdm1_opt, d_shift):
         """
