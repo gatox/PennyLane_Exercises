@@ -120,7 +120,6 @@ class NOFVQE:
         self.functional = functional
         self.ipnof = self._func_indix(functional)
         self.conv_tol = conv_tol
-        self.init_param = init_param
         self.max_iterations = max_iterations
         self.gradient = gradient
         self.d_shift = d_shift
@@ -242,7 +241,7 @@ class NOFVQE:
                 if region == "eu-de":
                     self._ibm_service = QiskitRuntimeService(name="eu-de-ibm-quantum-platform")
                 elif region == "us-east":
-                    self._ibm_service = QiskitRuntimeService() # default (us-east)
+                    self._ibm_service = QiskitRuntimeService(name="us-east-ibm-quantum-platform")
                 else:
                     raise RuntimeError(f"Unsupported region: {region}")
             # Attempt IBM Q with retries
@@ -582,6 +581,11 @@ class NOFVQE:
         else:
             self.dev_old = self.dev
             self.dev = "real"
+            """ 
+            Optimized values are first computed with a simulator. 
+            Then, they are recalculated using a real QC.
+            """
+            print("==== Hybrid mode activated ====")
             E_hybrid, params_hybrid, rdm1_hybrid, n_hybrid, vecs_hybrid, cj12_hybrid, ck12_hybrid = self._vqe(
                 self.ene_pnof4, self.opt_param, self.crd, max_iterations=1)
             self.dev = self.dev_old
@@ -702,7 +706,7 @@ class NOFVQE:
     
     def grad(self):
         """The gradient is a post-processing calculation that depends on first computing the energy by VQE optimization"""
-        if self.opt_param is None:
+        if self.opt_param is None and self.gradient in ["df_fedorov", "df_normal"]:
             print("Optimal parameter is None. Proceeding to compute the vqe energy")
             _,self.opt_param, self.opt_rdm1 = self.ene_vqe()
         if self.gradient == "df_fedorov":
