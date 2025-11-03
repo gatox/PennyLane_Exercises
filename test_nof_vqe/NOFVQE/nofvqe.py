@@ -442,12 +442,43 @@ class NOFVQE:
         cj12_history = [cj12]
         ck12_history = [ck12]
         
-        for it in range(max_iterations):
+        # for it in range(max_iterations):
         
+        #     # gradient only w.r.t. params, so we take the first component (energy)
+        #     grad_fn = lambda p: E_fn(p, crds)[0]
+        #     gradient = jax.grad(grad_fn)(params)
+        
+        #     updates, opt_state = opt.update(gradient, opt_state)
+        #     params = optax.apply_updates(params, updates)
+        
+        for it in range(max_iterations):
             # gradient only w.r.t. params, so we take the first component (energy)
             grad_fn = lambda p: E_fn(p, crds)[0]
-            gradient = jax.grad(grad_fn)(params)
-        
+
+            # Try analytic JAX grad, fallback to numerical FD if not supported
+            do_fallback = False
+            try:
+                gradient = jax.grad(grad_fn)(params)
+            except NotImplementedError as e:
+                print("WARNING: JAX analytic gradient not supported on this backend:", e)
+                do_fallback = True
+            except Exception as e:
+                print("WARNING: JAX gradient raised exception, falling back to FD:", repr(e))
+                do_fallback = True
+
+            if do_fallback:
+                # numerical central finite differences
+                eps = 1e-6
+                p0 = np.asarray(params, dtype=float)
+                g = np.zeros_like(p0, dtype=float)
+                for i in range(p0.size):
+                    xp = p0.copy(); xm = p0.copy()
+                    xp[i] += eps; xm[i] -= eps
+                    Ep = float(E_fn(jnp.array(xp), crds)[0])
+                    Em = float(E_fn(jnp.array(xm), crds)[0])
+                    g[i] = (Ep - Em) / (2.0 * eps)
+                gradient = jnp.array(g)
+
             updates, opt_state = opt.update(gradient, opt_state)
             params = optax.apply_updates(params, updates)
 
