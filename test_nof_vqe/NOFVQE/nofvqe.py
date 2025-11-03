@@ -233,7 +233,8 @@ class NOFVQE:
         retry_delay = 5
         qubits = 2 * norb
         hf_state = [1] * n_elec + [0] * (qubits - n_elec)
-        if self.dev == "simulator":
+        if self.dev in ["simulator", "hybrid"]:
+            # Hybrid mode uses simulator device for initial optimization
             dev = qml.device("lightning.qubit", wires=qubits)
         else:
             # Only initialize IBM service once
