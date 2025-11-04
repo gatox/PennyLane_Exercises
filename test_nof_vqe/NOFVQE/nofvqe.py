@@ -484,15 +484,21 @@ class NOFVQE:
             E_val, _, _, _, _, _ = E_fn(x, crds)
             return float(E_val)
         
+        # If running on a real/remote backend, do NOT supply an analytic jacobian to SciPy.
+        # SciPy will use finite differences (function evaluations only) which is robust.
+        use_analytic_jac = (method.lower() in ["slsqp", "l-bfgs-b"]) and (getattr(self, "dev", "simulator") == "simulator")
+        
         #COBYLA optimizer doesn't support jacobian
-        if method.lower() in ["slsqp", "l-bfgs-b"]:
+        if use_analytic_jac:
             def grad_scipy(x):
                 x = jnp.array(x)  # ensure JAX array
                 grad_fn = lambda p: E_fn(p, crds)[0]
+                # This will call jax.grad - only safe on local simulator
                 g = jax.grad(grad_fn)(x)
                 return np.array(g, dtype=float)
             jac = grad_scipy
         else:
+            # For remote devices or other methods, let SciPy approximate the jac via FD
             jac = None  # COBYLA doesn't use gradients
 
         res = minimize(
