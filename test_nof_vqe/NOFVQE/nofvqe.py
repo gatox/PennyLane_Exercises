@@ -294,6 +294,8 @@ class NOFVQE:
         def rdm1_qnode(theta):
             self._ansatz(theta, hf_state, qubits)
             return [qml.expval(op) for op in self._build_rdm1_ops(norb)]
+
+        params = jnp.atleast_1d(jnp.asarray(params))
         
         rdm1 = jnp.array(rdm1_qnode(params))
 
@@ -595,7 +597,7 @@ class NOFVQE:
             Then, they are recalculated using a real QC.
             """
             E_hybrid, params_hybrid, rdm1_hybrid, n_hybrid, vecs_hybrid, cj12_hybrid, ck12_hybrid = self._vqe(
-                self.ene_pnof4, float(self.opt_param[0]), self.crd, max_iterations=1)
+                self.ene_pnof4, self.opt_param, self.crd, max_iterations=1)
             print("==== Hybrid mode activated ====")
             print("Devise: ",str(self.dev))
             print("Opt_circ: ",self.opt_circ)
