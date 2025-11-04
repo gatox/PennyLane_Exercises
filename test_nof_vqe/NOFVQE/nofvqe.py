@@ -295,6 +295,10 @@ class NOFVQE:
             self._ansatz(theta, hf_state, qubits)
             return [qml.expval(op) for op in self._build_rdm1_ops(norb)]
 
+        params = jnp.asarray(params)
+        if params.ndim == 1 and params.size == 1:
+            params = params.item()
+        
         rdm1 = jnp.array(rdm1_qnode(params))
 
         # Flatten rdm1 if using SLSQP or L-BFGS-B
@@ -578,7 +582,7 @@ class NOFVQE:
         self.opt_cj12 = cj12_history[-1]
         self.opt_ck12 = ck12_history[-1]
         print("==== Hybrid mode deactivated ====")
-        print("Devise: ",self.dev)
+        print("Device: ",str(self.dev))
         print("Opt_circ: ",self.opt_circ)
         print("E_min_simulator: ",E_history[-1])
         print("theta_min_simulator: ",params_history[-1])
@@ -587,23 +591,23 @@ class NOFVQE:
             return E_history[-1], params_history[-1], rdm1_history[-1], n_history[-1], vecs_history[-1], cj12_history[-1], ck12_history[-1]
         else:
             self.dev_old = self.dev
-            self.opt_circ_old = self.opt_circ
+            #self.opt_circ_old = self.opt_circ
             self.dev = "real"
-            self.opt_circ = "adam"
+            #self.opt_circ = "adam"
             """ 
             Optimized values are first computed with a simulator. 
             Then, they are recalculated using a real QC.
             """
             E_hybrid, params_hybrid, rdm1_hybrid, n_hybrid, vecs_hybrid, cj12_hybrid, ck12_hybrid = self._vqe(
-                self.ene_pnof4, self.opt_param, self.crd, max_iterations=3)
+                self.ene_pnof4, self.opt_param, self.crd, max_iterations=1)
             print("==== Hybrid mode activated ====")
-            print("Devise: ",self.dev)
+            print("Devise: ",str(self.dev))
             print("Opt_circ: ",self.opt_circ)
             print("E_min_qc: ",E_hybrid[-1])
             print("theta_min_qc: ",params_hybrid[-1])
             print("===============================")
             self.dev = self.dev_old
-            self.opt_circ = self.opt_circ_old
+            #self.opt_circ = self.opt_circ_old
             self.opt_param = params_hybrid[-1]
             self.opt_rdm1 = rdm1_hybrid[-1]
             self.opt_n = n_hybrid[-1]
@@ -777,12 +781,13 @@ if __name__ == "__main__":
             optimization_level=optimization_level,
             resilience_level=resilience_level,
                  )
-    #crds = cal.crd 
+    dev = cal.dev
+    print("Device: ",dev) 
     # # Run VQE
     #E_h, params_h, rdm1_h, n_h, vecs_h, cj12_h, ck12_h=cal._vqe(cal.ene_pnof4, init_param, crds, method="adam")
     # Run NOF-VQE
-    E_min, params_opt, rdm1_opt, n, vecs, cj12, ck12 = cal.ene_vqe()
-    print("Min Ene VQE and param:", E_min, params_opt)
-    # Nuclear gradient
-    grad = cal.grad()
-    print(f"Nuclear gradient ({gradient}):\n", grad)  
+    # E_min, params_opt, rdm1_opt, n, vecs, cj12, ck12 = cal.ene_vqe()
+    # print("Min Ene VQE and param:", E_min, params_opt)
+    # # Nuclear gradient
+    # grad = cal.grad()
+    # print(f"Nuclear gradient ({gradient}):\n", grad)  
