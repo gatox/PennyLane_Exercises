@@ -227,6 +227,12 @@ class NOFVQE:
             E_nuc, h_MO, I_MO, n_elec, norb = self._mo_integrals_pennylane(crd)
         return E_nuc, h_MO, I_MO, n_elec, norb
 
+    def _wrap_angles(self, p):
+        p = np.asarray(p, dtype=float)
+        # Map each parameter to (-pi, pi]
+        return ((p + np.pi) % (2*np.pi)) - np.pi
+
+
     # ---------- measure 1-RDM on the circuit ----------
     def _rdm1_from_circuit(self, params, n_elec, norb, region="eu-de", allow_fallback=False):
         max_retries = 10
@@ -501,16 +507,22 @@ class NOFVQE:
             # For remote devices or other methods, let SciPy approximate the jac via FD
             jac = None  # COBYLA doesn't use gradients
 
+        bounds = [(-np.pi, np.pi) for _ in range(len(np.atleast_1d(params)))]
+
         res = minimize(
             E_scipy,
-            np.array(params),
+            np.array(params, dtype=float),
             method=method.upper(),
             jac=jac,
+            bounds=bounds,
             tol=self.conv_tol,
             options={"maxiter": max_iterations},
         )
+        
+        res_x = np.asarray(res.x, dtype=float)
+        res_x_wrapped = self._wrap_angles(res_x)
 
-        E_val, rdm1_val, n_val, vecs_val, cj12_val, ck12_val = E_fn(jnp.array(res.x), crds)
+        E_val, rdm1_val, n_val, vecs_val, cj12_val, ck12_val = E_fn(jnp.array(res_x_wrapped), crds)
         return [E_val], [res.x], [rdm1_val], [n_val], [vecs_val], [cj12_val], [ck12_val]
     
     def _vqe_cmaes(self, E_fn, params, crds, max_iterations):
