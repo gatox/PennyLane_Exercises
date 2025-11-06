@@ -508,7 +508,7 @@ class NOFVQE:
             jac = None  # COBYLA doesn't use gradients
 
         bounds = [(-np.pi, np.pi) for _ in range(len(np.atleast_1d(params)))]
-
+        print("[DEBUG] SLSQP x0:", np.array(params, dtype=float))
         res = minimize(
             E_scipy,
             np.array(params, dtype=float),
@@ -518,6 +518,7 @@ class NOFVQE:
             tol=self.conv_tol,
             options={"maxiter": max_iterations},
         )
+        print("[DEBUG] SLSQP res.x (raw):", res.x)
         
         res_x = np.asarray(res.x, dtype=float)
         res_x_wrapped = self._wrap_angles(res_x)
@@ -601,7 +602,7 @@ class NOFVQE:
         print("Device: ",str(self.dev))
         print("Opt_circ: ",self.opt_circ)
         print("E_min_simulator: ",E_history[-1])
-        print("theta_min_simulator: ",params_history[-1])
+        #print("theta_min_simulator: ",params_history[-1])
         print("===============================")
         if self.dev != "hybrid":
             return E_history[-1], params_history[-1], rdm1_history[-1], n_history[-1], vecs_history[-1], cj12_history[-1], ck12_history[-1]
@@ -614,27 +615,39 @@ class NOFVQE:
             Optimized values are first computed with a simulator. 
             Then, they are recalculated using a real QC.
             """
-            E_hybrid, params_hybrid, rdm1_hybrid, n_hybrid, vecs_hybrid, cj12_hybrid, ck12_hybrid = self._vqe(
-                self.ene_pnof4, self.opt_param, self.crd, max_iterations=1)
+            # E_hybrid, params_hybrid, rdm1_hybrid, n_hybrid, vecs_hybrid, cj12_hybrid, ck12_hybrid = self._vqe(
+            #     self.ene_pnof4, self.opt_param, self.crd, max_iterations=1)
+            E_hybrid, rdm1_hybrid, n_hybrid, vecs_hybrid, cj12_hybrid, ck12_hybrid = self.ene_pnof4(
+                self.opt_param, self.crd)
             print("==== Hybrid mode activated ====")
             print("Devise: ",str(self.dev))
             print("Opt_circ: ",self.opt_circ)
-            print("E_min_qc: ",E_hybrid[-1])
-            print("theta_min_qc: ",params_hybrid[-1])
+            print("E_min_qc: ",E_hybrid)
+            #print("theta_min_qc: ",params_hybrid[-1])
             print("===============================")
             self.dev = self.dev_old
             #self.opt_circ = self.opt_circ_old
-            self.opt_param = params_hybrid[-1]
-            self.opt_rdm1 = rdm1_hybrid[-1]
-            self.opt_n = n_hybrid[-1]
-            self.opt_vecs = vecs_hybrid[-1]
-            self.opt_cj12 = cj12_hybrid[-1]
-            self.opt_ck12 = ck12_hybrid[-1]
-            # Diagnostic: how noise shifted the parameters
-            delta_theta = params_hybrid[-1] - params_history[-1]
-            print("(hardware - simulator) =", delta_theta)
-            print("square norm =", np.linalg.norm(delta_theta))
-            return E_hybrid[-1], params_hybrid[-1], rdm1_hybrid[-1], n_hybrid[-1], vecs_hybrid[-1], cj12_hybrid[-1], ck12_hybrid[-1]
+            #self.opt_param = params_hybrid[-1]
+            # self.opt_rdm1 = rdm1_hybrid[-1]
+            # self.opt_n = n_hybrid[-1]
+            # self.opt_vecs = vecs_hybrid[-1]
+            # self.opt_cj12 = cj12_hybrid[-1]
+            # self.opt_ck12 = ck12_hybrid[-1]
+
+            #######The energy is ecaluated into the QC#######
+            self.opt_rdm1 = rdm1_hybrid
+            self.opt_n = n_hybrid
+            self.opt_vecs = vecs_hybrid
+            self.opt_cj12 = cj12_hybrid
+            self.opt_ck12 = ck12_hybrid
+            #################################################
+
+            ## Diagnostic: how noise shifted the parameters
+            ##delta_theta = params_hybrid[-1] - params_history[-1]
+            ##print("(hardware - simulator) =", delta_theta)
+            ##print("square norm =", np.linalg.norm(delta_theta))
+            #return E_hybrid[-1], params_hybrid[-1], rdm1_hybrid[-1], n_hybrid[-1], vecs_hybrid[-1], cj12_hybrid[-1], ck12_hybrid[-1]
+            return E_hybrid, params_history[-1], rdm1_hybrid, n_hybrid, vecs_hybrid, cj12_hybrid, ck12_hybrid
 
     def _nuclear_gradient_dff_fedorov(self, params, crds, rdm1_opt, d_shift):
         """
