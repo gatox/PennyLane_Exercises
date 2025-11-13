@@ -304,7 +304,8 @@ class NOFVQE:
         params = jnp.atleast_1d(jnp.asarray(params))
         
         rdm1 = jnp.array(rdm1_qnode(params))
-
+        print("rdm1_ before_flated:", rdm1)
+        print("rdm1_ before_flated_dim:", rdm1.shape)
         # Flatten rdm1 if using SLSQP or L-BFGS-B
         if self.opt_circ in ["slsqp", "l-bfgs-b", "cobyla"]:
             rdm1 = rdm1.flatten()
@@ -810,13 +811,17 @@ if __name__ == "__main__":
             optimization_level=optimization_level,
             resilience_level=resilience_level,
                  )
-    dev = cal.dev
-    print("Device: ",dev) 
-    # # Run VQE
-    #E_h, params_h, rdm1_h, n_h, vecs_h, cj12_h, ck12_h=cal._vqe(cal.ene_pnof4, init_param, crds, method="adam")
+    # Run VQE
+    # E_h, params_h, rdm1_h, n_h, vecs_h, cj12_h, ck12_h=cal._vqe(cal.ene_pnof4, init_param, crds, method="adam")
     # Run NOF-VQE
-    # E_min, params_opt, rdm1_opt, n, vecs, cj12, ck12 = cal.ene_vqe()
-    # print("Min Ene VQE and param:", E_min, params_opt)
+    E_min, params_opt, rdm1_opt, n, vecs, cj12, ck12 = cal.ene_vqe()
+    print("Min Ene VQE and param:", E_min, params_opt)
+    print("rdm1_opt_dim:", rdm1_opt.shape)
+    print("rdm1_opt:", rdm1_opt)
+    print("n_dim:", n.shape)
+    print("n:", n)
+    print("vecs_dim:", vecs.shape)
+    print("vecs:", vecs)
     # # Nuclear gradient
     # grad = cal.grad()
     # print(f"Nuclear gradient ({gradient}):\n", grad)  
