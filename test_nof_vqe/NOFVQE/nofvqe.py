@@ -304,8 +304,6 @@ class NOFVQE:
         params = jnp.atleast_1d(jnp.asarray(params))
         
         rdm1 = jnp.array(rdm1_qnode(params))
-        print("rdm1_ before_flated:", rdm1)
-        print("rdm1_ before_flated_dim:", rdm1.shape)
         # Flatten rdm1 if using SLSQP or L-BFGS-B
         if self.opt_circ in ["slsqp", "l-bfgs-b", "cobyla"]:
             rdm1 = rdm1.flatten()
@@ -509,7 +507,6 @@ class NOFVQE:
             jac = None  # COBYLA doesn't use gradients
 
         bounds = [(-np.pi, np.pi) for _ in range(len(np.atleast_1d(params)))]
-        print("[DEBUG] SLSQP x0:", np.array(params, dtype=float))
         res = minimize(
             E_scipy,
             np.array(params, dtype=float),
@@ -519,7 +516,6 @@ class NOFVQE:
             tol=self.conv_tol,
             options={"maxiter": max_iterations},
         )
-        print("[DEBUG] SLSQP res.x (raw):", res.x)
         
         res_x = np.asarray(res.x, dtype=float)
         res_x_wrapped = self._wrap_angles(res_x)
@@ -602,8 +598,6 @@ class NOFVQE:
         print("==== Hybrid mode deactivated ====")
         print("Device: ",str(self.dev))
         print("Opt_circ: ",self.opt_circ)
-        print("E_min_simulator: ",E_history[-1])
-        #print("theta_min_simulator: ",params_history[-1])
         print("===============================")
         if self.dev != "hybrid":
             return E_history[-1], params_history[-1], rdm1_history[-1], n_history[-1], vecs_history[-1], cj12_history[-1], ck12_history[-1]
@@ -623,8 +617,6 @@ class NOFVQE:
             print("==== Hybrid mode activated ====")
             print("Devise: ",str(self.dev))
             print("Opt_circ: ",self.opt_circ)
-            print("E_min_qc: ",E_hybrid)
-            #print("theta_min_qc: ",params_hybrid[-1])
             print("===============================")
             self.dev = self.dev_old
             #self.opt_circ = self.opt_circ_old
