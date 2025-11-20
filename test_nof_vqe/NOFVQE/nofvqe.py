@@ -162,6 +162,23 @@ class NOFVQE:
         qml.BasisState(hf_state, wires=range(qubits))
         qml.DoubleExcitation(params, wires=[0, 1, 2, 3])
 
+    # ---------------- Ansatz 2----------------
+    def _ansatz_2(self, params, hf_state, qubits, n_elec):
+        singles, doubles = qml.qchem.excitations(n_elec, qubits)
+        print("Number of single excitations: ", len(singles))
+        print("Number of double excitations: ", len(doubles))
+        # prepares reference state
+        qml.BasisState(hf_state, wires=range(qubits))
+        # apply all single excitations
+        i = -1
+        for s in singles:
+            i = i + 1
+            qml.SingleExcitation(params[i], wires=s)
+        # apply all double excitations
+        for d in doubles:
+            i = i + 1
+            qml.DoubleExcitation(params[i], wires=d)
+
     def _build_rdm1_ops(self, norb):
         ops = []
         for p in range(0, norb):
@@ -246,7 +263,8 @@ class NOFVQE:
             # Only initialize IBM service once
             if not hasattr(self, "_ibm_service"):
                 if region == "eu-de":
-                    self._ibm_service = QiskitRuntimeService(name="eu-de-ibm-quantum-platform")
+                    #self._ibm_service = QiskitRuntimeService(name="eu-de-ibm-quantum-platform")
+                    self._ibm_service = QiskitRuntimeService(name="generic_eu-de-ibm-quantum-platform")  # generic_nofvqe
                 elif region == "us-east":
                     self._ibm_service = QiskitRuntimeService(name="us-east-ibm-quantum-platform")
                 else:
@@ -299,6 +317,7 @@ class NOFVQE:
         @qml.qnode(dev, interface="jax")
         def rdm1_qnode(theta):
             self._ansatz(theta, hf_state, qubits)
+            #self._ansatz_2(theta, hf_state, qubits, n_elec)
             return [qml.expval(op) for op in self._build_rdm1_ops(norb)]
 
         params = jnp.atleast_1d(jnp.asarray(params))
