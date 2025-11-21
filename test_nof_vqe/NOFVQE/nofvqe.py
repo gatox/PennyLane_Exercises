@@ -251,7 +251,8 @@ class NOFVQE:
 
 
     # ---------- measure 1-RDM on the circuit ----------
-    def _rdm1_from_circuit(self, params, n_elec, norb, region="eu-de", allow_fallback=False):
+    #def _rdm1_from_circuit(self, params, n_elec, norb, region="eu-de", allow_fallback=False):
+    def _rdm1_from_circuit(self, params, n_elec, norb, region="us-east", allow_fallback=False):
         max_retries = 10
         retry_delay = 5
         qubits = 2 * norb
