@@ -291,7 +291,8 @@ class NOFVQE:
                         if region == "eu-de":
                             backend = self._ibm_service.backend("ibm_basquecountry")
                         else:
-                            backend = self._ibm_service.least_busy(operational=True, simulator=False, system="heron2")
+                            backend = self._ibm_service.backend("ibm_kingston")
+                            #backend = self._ibm_service.least_busy(operational=True, simulator=False, system="heron2")
                     # Use PennyLane device real/with noisy simulator
                     dev = qml.device('qiskit.remote', 
                                     wires=backend.num_qubits,
