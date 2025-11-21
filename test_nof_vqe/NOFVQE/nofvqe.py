@@ -264,7 +264,8 @@ class NOFVQE:
             if not hasattr(self, "_ibm_service"):
                 if region == "eu-de":
                     #self._ibm_service = QiskitRuntimeService(name="eu-de-ibm-quantum-platform")
-                    self._ibm_service = QiskitRuntimeService(name="generic_eu-de-ibm-quantum-platform")  # generic_nofvqe
+                    #self._ibm_service = QiskitRuntimeService(name="generic_eu-de-ibm-quantum-platform")  # generic_nofvqe
+                    self._ibm_service = QiskitRuntimeService(name="solving_equation_eu-de-ibm-quantum-platform")  # solving_eq_nofvqe
                 elif region == "us-east":
                     self._ibm_service = QiskitRuntimeService(name="us-east-ibm-quantum-platform")
                 else:
