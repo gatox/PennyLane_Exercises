@@ -123,7 +123,7 @@ class NOFVQE:
         self.max_iterations = max_iterations
         self.gradient = gradient
         self.d_shift = d_shift
-        self.init_param_default = 0.1
+        self.init_param_default = [0.1,0.1,0.1] 
         self.p = pynof.param(self.mol,self.basis)
         self.p.ipnof = self.ipnof
         self.p.RI = True
@@ -161,6 +161,7 @@ class NOFVQE:
     def _ansatz(self, params, hf_state, qubits):
         qml.BasisState(hf_state, wires=range(qubits))
         qml.DoubleExcitation(params, wires=[0, 1, 2, 3])
+        print("parameter:", params)
 
     # ---------------- Ansatz 2----------------
     def _ansatz_2(self, params, hf_state, qubits, n_elec):
@@ -178,6 +179,7 @@ class NOFVQE:
         for d in doubles:
             i = i + 1
             qml.DoubleExcitation(params[i], wires=d)
+        print("parameter:", params)
 
     def _build_rdm1_ops(self, norb):
         ops = []
@@ -256,6 +258,7 @@ class NOFVQE:
         max_retries = 10
         retry_delay = 5
         qubits = 2 * norb
+        print("Before attempt dev:")
         hf_state = [1] * n_elec + [0] * (qubits - n_elec)
         if self.dev in ["simulator", "hybrid"]:
             # Hybrid mode uses simulator device for initial optimization
@@ -319,11 +322,12 @@ class NOFVQE:
                     raise RuntimeError("IBM Q unavailable after retries")
         @qml.qnode(dev, interface="jax")
         def rdm1_qnode(theta):
-            self._ansatz(theta, hf_state, qubits)
-            #self._ansatz_2(theta, hf_state, qubits, n_elec)
+            #self._ansatz(theta, hf_state, qubits)
+            self._ansatz_2(theta, hf_state, qubits, n_elec)
             return [qml.expval(op) for op in self._build_rdm1_ops(norb)]
 
         params = jnp.atleast_1d(jnp.asarray(params))
+        print("Calling _rdm1_from_circuit:")
         
         rdm1 = jnp.array(rdm1_qnode(params))
         # Flatten rdm1 if using SLSQP or L-BFGS-B
@@ -830,12 +834,10 @@ if __name__ == "__main__":
     # Run NOF-VQE
     E_min, params_opt, rdm1_opt, n, vecs, cj12, ck12 = cal.ene_vqe()
     print("Min Ene VQE and param:", E_min, params_opt)
-    print("rdm1_opt_dim:", rdm1_opt.shape)
+    print("params_opt:", params_opt)
     print("rdm1_opt:", rdm1_opt)
-    print("n_dim:", n.shape)
-    print("n:", n)
-    print("vecs_dim:", vecs.shape)
-    print("vecs:", vecs)
-    # # Nuclear gradient
-    # grad = cal.grad()
-    # print(f"Nuclear gradient ({gradient}):\n", grad)  
+    print("n_opt:", n)
+    print("vecs_opt:", vecs)
+    # Nuclear gradient
+    grad = cal.grad()
+    print(f"Nuclear gradient ({gradient}):\n", grad)  
