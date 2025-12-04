@@ -118,12 +118,14 @@ class NOFVQE:
         #self.crd = np.array([[self.mol.x(i), self.mol.y(i), self.mol.z(i)] for i in range(self.mol.natom())])
         self.basis = basis
         self.functional = functional
-        self.ipnof = self._func_indix(functional)
+        self.ipnof = None
+        if functional == "PNOF4":
+            self.ipnof = self._func_indix(functional)
         self.conv_tol = conv_tol
         self.max_iterations = max_iterations
         self.gradient = gradient
         self.d_shift = d_shift
-        self.init_param_default = [0.1,0.1,0.1] 
+        self.init_param_default = 0.1 
         self.p = pynof.param(self.mol,self.basis)
         self.p.ipnof = self.ipnof
         self.p.RI = True
@@ -161,7 +163,6 @@ class NOFVQE:
     def _ansatz(self, params, hf_state, qubits):
         qml.BasisState(hf_state, wires=range(qubits))
         qml.DoubleExcitation(params, wires=[0, 1, 2, 3])
-        print("parameter:", params)
 
     # ---------------- Ansatz 2----------------
     def _ansatz_2(self, params, hf_state, qubits, n_elec):
@@ -179,7 +180,6 @@ class NOFVQE:
         for d in doubles:
             i = i + 1
             qml.DoubleExcitation(params[i], wires=d)
-        print("parameter:", params)
 
     def _build_rdm1_ops(self, norb):
         ops = []
@@ -322,8 +322,8 @@ class NOFVQE:
                     raise RuntimeError("IBM Q unavailable after retries")
         @qml.qnode(dev, interface="jax")
         def rdm1_qnode(theta):
-            #self._ansatz(theta, hf_state, qubits)
-            self._ansatz_2(theta, hf_state, qubits, n_elec)
+            self._ansatz(theta, hf_state, qubits)
+            #self._ansatz_2(theta, hf_state, qubits, n_elec)
             return [qml.expval(op) for op in self._build_rdm1_ops(norb)]
 
         params = jnp.atleast_1d(jnp.asarray(params))
@@ -335,6 +335,24 @@ class NOFVQE:
             rdm1 = rdm1.flatten()
         
         return rdm1
+    
+    def ene_hf(self, params, crd):
+        self.pl_mol = qml.qchem.Molecule(
+            symbols=self.symbols,
+            coordinates=crd,
+            unit = self.units
+            )
+        qubits = [0,1,2,3]
+        dev = qml.device("lightning.qubit", wires=qubits)
+        @qml.qnode(dev, interface="jax")
+        def hf_qnode(theta):
+            qml.BasisState(np.array([1, 1, 0, 0]), wires=range(4))
+            qml.DoubleExcitation(theta, wires=qubits)
+            H = qml.qchem.molecular_hamiltonian(self.pl_mol, args=[crd])[0]
+            return qml.expval(H)
+        val = hf_qnode(params)       
+        val = jnp.squeeze(val)     
+        return val, None, None, None, None, None
 
     def ene_pnof4(self, params, crds, rdm1=None):
         # Functions based on 1-RDM (J. Chem. Theory Comput. 2025, 21, 5, 2402–2413) and taked from the following repository:
@@ -612,6 +630,26 @@ class NOFVQE:
             )
 
     def ene_vqe(self):
+        if self.functional != "PNOF4":
+            method_opt = "slsqp"
+            print("==== HF_VQE ====")
+            res = self._vqe_opt_scipy(self.ene_hf, method_opt, self.init_param, self.crd, self.max_iterations)
+
+            # res can be a tuple/list of length >= 2:
+            # ([E_history], [params_history], [rdm1_history], [n_history], [vecs_history], ...)
+            if isinstance(res, (list, tuple)) and len(res) >= 2:
+                E_history = res[0]
+                params_history = res[1]
+            else:
+                # If the optimizer unexpectedly returned a single value, try to handle it
+                raise ValueError("Unexpected return from _vqe_opt_scipy: need at least E_history and params_history")
+
+            # Ensure we return the final (scalar) energy and final parameters
+            E_final = E_history[-1] if len(E_history) > 0 else E_history
+            params_final = params_history[-1] if len(params_history) > 0 else params_history
+            self.opt_param = params_final
+            return E_final, params_final, None, None, None, None, None
+
         E_history, params_history, rdm1_history, n_history, vecs_history, cj12_history, ck12_history = self._vqe(
             self.ene_pnof4, self.init_param, self.crd
             )
@@ -693,8 +731,12 @@ class NOFVQE:
                 crds_plus[a, xyz] = crds[a, xyz] + d_shift
                 crds_minus[a, xyz] = crds[a, xyz] - d_shift
 
-                E_plus, _, _, _, _, _ = self.ene_pnof4(params, crds_plus, rdm1=rdm1_opt)
-                E_minus, _, _, _, _, _ = self.ene_pnof4(params, crds_minus, rdm1=rdm1_opt)
+                if self.functional != "PNOF4":
+                    E_plus, _, _, _, _, _ = self.ene_hf(params, crds_plus)
+                    E_minus, _, _, _, _, _ = self.ene_hf(params, crds_minus)
+                else:
+                    E_plus, _, _, _, _, _ = self.ene_pnof4(params, crds_plus, rdm1=rdm1_opt)
+                    E_minus, _, _, _, _, _ = self.ene_pnof4(params, crds_minus, rdm1=rdm1_opt)
 
                 grad[a, xyz] = (E_plus - E_minus) / (2 * d_shift)
         return grad
@@ -800,12 +842,12 @@ class NOFVQE:
 # =========================
 if __name__ == "__main__":
     xyz_file = "h2_bohr.xyz"
-    functional="PNOF4"
+    functional="vqe"
     conv_tol=1e-7
     init_param=0.1
     basis='sto-3g'
     max_iterations=500
-    gradient="analytics"
+    gradient="df_fedorov"
     d_shift=1e-4
     C_MO = "guest_C_MO"
     dev="simulator"

@@ -31,7 +31,7 @@ def make_cost_fn(H, wires, hf):
 
     return cost_fn
 
-def vqe_optimize(H, qubits, params0=None, maxiter=100, tol=1e-7):
+def vqe_optimize(H, qubits, params0=None, maxiter=100, tol=1e-8):
     """Optimize VQE parameters for Hamiltonian H, returning (energy, params)."""
     # Hartree–Fock reference state |11> for H2 in STO-3G after mapping (2 electrons)
     hf = hf_state(electrons, qubits)
