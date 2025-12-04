@@ -322,8 +322,8 @@ class NOFVQE:
                     raise RuntimeError("IBM Q unavailable after retries")
         @qml.qnode(dev, interface="jax")
         def rdm1_qnode(theta):
-            self._ansatz(theta, hf_state, qubits)
-            #self._ansatz_2(theta, hf_state, qubits, n_elec)
+            #self._ansatz(theta, hf_state, qubits)
+            self._ansatz_2(theta, hf_state, qubits, n_elec)
             return [qml.expval(op) for op in self._build_rdm1_ops(norb)]
 
         params = jnp.atleast_1d(jnp.asarray(params))
@@ -630,7 +630,7 @@ class NOFVQE:
             )
 
     def ene_vqe(self):
-        if self.functional != "PNOF4":
+        if self.functional == "vqe":
             method_opt = "slsqp"
             print("==== HF_VQE ====")
             res = self._vqe_opt_scipy(self.ene_hf, method_opt, self.init_param, self.crd, self.max_iterations)
@@ -649,62 +649,64 @@ class NOFVQE:
             params_final = params_history[-1] if len(params_history) > 0 else params_history
             self.opt_param = params_final
             return E_final, params_final, None, None, None, None, None
-
-        E_history, params_history, rdm1_history, n_history, vecs_history, cj12_history, ck12_history = self._vqe(
-            self.ene_pnof4, self.init_param, self.crd
-            )
-        self.opt_param = params_history[-1]
-        self.opt_rdm1 = rdm1_history[-1]
-        self.opt_n = n_history[-1]
-        self.opt_vecs = vecs_history[-1]
-        self.opt_cj12 = cj12_history[-1]
-        self.opt_ck12 = ck12_history[-1]
-        print("==== Hybrid mode deactivated ====")
-        print("Device: ",str(self.dev))
-        print("Opt_circ: ",self.opt_circ)
-        print("===============================")
-        if self.dev != "hybrid":
-            return E_history[-1], params_history[-1], rdm1_history[-1], n_history[-1], vecs_history[-1], cj12_history[-1], ck12_history[-1]
-        else:
-            self.dev_old = self.dev
-            #self.opt_circ_old = self.opt_circ
-            self.dev = "real"
-            #self.opt_circ = "adam"
-            """ 
-            Optimized values are first computed with a simulator. 
-            Then, they are recalculated using a real QC.
-            """
-            # E_hybrid, params_hybrid, rdm1_hybrid, n_hybrid, vecs_hybrid, cj12_hybrid, ck12_hybrid = self._vqe(
-            #     self.ene_pnof4, self.opt_param, self.crd, max_iterations=1)
-            E_hybrid, rdm1_hybrid, n_hybrid, vecs_hybrid, cj12_hybrid, ck12_hybrid = self.ene_pnof4(
-                self.opt_param, self.crd)
-            print("==== Hybrid mode activated ====")
-            print("Devise: ",str(self.dev))
+        elif self.functional == "pnof4":
+            E_history, params_history, rdm1_history, n_history, vecs_history, cj12_history, ck12_history = self._vqe(
+                self.ene_pnof4, self.init_param, self.crd
+                )
+            self.opt_param = params_history[-1]
+            self.opt_rdm1 = rdm1_history[-1]
+            self.opt_n = n_history[-1]
+            self.opt_vecs = vecs_history[-1]
+            self.opt_cj12 = cj12_history[-1]
+            self.opt_ck12 = ck12_history[-1]
+            print("==== Hybrid mode deactivated ====")
+            print("Device: ",str(self.dev))
             print("Opt_circ: ",self.opt_circ)
             print("===============================")
-            self.dev = self.dev_old
-            #self.opt_circ = self.opt_circ_old
-            #self.opt_param = params_hybrid[-1]
-            # self.opt_rdm1 = rdm1_hybrid[-1]
-            # self.opt_n = n_hybrid[-1]
-            # self.opt_vecs = vecs_hybrid[-1]
-            # self.opt_cj12 = cj12_hybrid[-1]
-            # self.opt_ck12 = ck12_hybrid[-1]
+            if self.dev != "hybrid":
+                return E_history[-1], params_history[-1], rdm1_history[-1], n_history[-1], vecs_history[-1], cj12_history[-1], ck12_history[-1]
+            else:
+                self.dev_old = self.dev
+                #self.opt_circ_old = self.opt_circ
+                self.dev = "real"
+                #self.opt_circ = "adam"
+                """ 
+                Optimized values are first computed with a simulator. 
+                Then, they are recalculated using a real QC.
+                """
+                # E_hybrid, params_hybrid, rdm1_hybrid, n_hybrid, vecs_hybrid, cj12_hybrid, ck12_hybrid = self._vqe(
+                #     self.ene_pnof4, self.opt_param, self.crd, max_iterations=1)
+                E_hybrid, rdm1_hybrid, n_hybrid, vecs_hybrid, cj12_hybrid, ck12_hybrid = self.ene_pnof4(
+                    self.opt_param, self.crd)
+                print("==== Hybrid mode activated ====")
+                print("Devise: ",str(self.dev))
+                print("Opt_circ: ",self.opt_circ)
+                print("===============================")
+                self.dev = self.dev_old
+                #self.opt_circ = self.opt_circ_old
+                #self.opt_param = params_hybrid[-1]
+                # self.opt_rdm1 = rdm1_hybrid[-1]
+                # self.opt_n = n_hybrid[-1]
+                # self.opt_vecs = vecs_hybrid[-1]
+                # self.opt_cj12 = cj12_hybrid[-1]
+                # self.opt_ck12 = ck12_hybrid[-1]
 
-            #######The energy is ecaluated into the QC#######
-            self.opt_rdm1 = rdm1_hybrid
-            self.opt_n = n_hybrid
-            self.opt_vecs = vecs_hybrid
-            self.opt_cj12 = cj12_hybrid
-            self.opt_ck12 = ck12_hybrid
-            #################################################
+                #######The energy is ecaluated into the QC#######
+                self.opt_rdm1 = rdm1_hybrid
+                self.opt_n = n_hybrid
+                self.opt_vecs = vecs_hybrid
+                self.opt_cj12 = cj12_hybrid
+                self.opt_ck12 = ck12_hybrid
+                #################################################
 
-            ## Diagnostic: how noise shifted the parameters
-            ##delta_theta = params_hybrid[-1] - params_history[-1]
-            ##print("(hardware - simulator) =", delta_theta)
-            ##print("square norm =", np.linalg.norm(delta_theta))
-            #return E_hybrid[-1], params_hybrid[-1], rdm1_hybrid[-1], n_hybrid[-1], vecs_hybrid[-1], cj12_hybrid[-1], ck12_hybrid[-1]
-            return E_hybrid, params_history[-1], rdm1_hybrid, n_hybrid, vecs_hybrid, cj12_hybrid, ck12_hybrid
+                ## Diagnostic: how noise shifted the parameters
+                ##delta_theta = params_hybrid[-1] - params_history[-1]
+                ##print("(hardware - simulator) =", delta_theta)
+                ##print("square norm =", np.linalg.norm(delta_theta))
+                #return E_hybrid[-1], params_hybrid[-1], rdm1_hybrid[-1], n_hybrid[-1], vecs_hybrid[-1], cj12_hybrid[-1], ck12_hybrid[-1]
+                return E_hybrid, params_history[-1], rdm1_hybrid, n_hybrid, vecs_hybrid, cj12_hybrid, ck12_hybrid
+        else:
+            raise ValueError(f"Unknown/unimplemented functional or method : {self.functional}")
 
     def _nuclear_gradient_dff_fedorov(self, params, crds, rdm1_opt, d_shift):
         """
@@ -844,7 +846,8 @@ if __name__ == "__main__":
     xyz_file = "h2_bohr.xyz"
     functional="vqe"
     conv_tol=1e-7
-    init_param=0.1
+    #init_param=0.1
+    init_param=[0.1, 0.1, 0.1]
     basis='sto-3g'
     max_iterations=500
     gradient="df_fedorov"
