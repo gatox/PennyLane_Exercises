@@ -124,15 +124,16 @@ class NOFVQE:
         self.conv_tol = conv_tol
         self.max_iterations = max_iterations
         self.gradient = gradient
-        self.d_shift = d_shift
-        self.init_param_default = 0.1 
+        self.d_shift = d_shift 
         self.p = pynof.param(self.mol,self.basis)
         self.p.ipnof = self.ipnof
         self.p.RI = True
-        if init_param is not None:
-            self.init_param = init_param
-        else:
-            self.init_param = self.init_param_default
+        # self.init_param_default = 0.1
+        # if init_param is not None:
+        #     self.init_param = init_param
+        # else:
+        #     self.init_param = self.init_param_default
+        self.init_param = None
         self.opt_param = None
         self.opt_rdm1 = None
         self.opt_n = None
@@ -166,9 +167,12 @@ class NOFVQE:
 
     # ---------------- Ansatz 2----------------
     def _ansatz_2(self, params, hf_state, qubits, n_elec):
-        singles, doubles = qml.qchem.excitations(n_elec, qubits)
+        singles, doubles = self.singles, self.doubles
+        #singles, doubles = qml.qchem.excitations(n_elec, qubits)
         print("Number of single excitations: ", len(singles))
         print("Number of double excitations: ", len(doubles))
+        n_params = len(singles) + len(doubles)
+        params = np.random.normal(scale=0.05, size=n_params) 
         # prepares reference state
         qml.BasisState(hf_state, wires=range(qubits))
         # apply all single excitations
@@ -244,6 +248,8 @@ class NOFVQE:
             E_nuc, h_MO, I_MO, n_elec, norb = self._mo_integrals_pynof()
         else:
             E_nuc, h_MO, I_MO, n_elec, norb = self._mo_integrals_pennylane(crd)
+        # self.n_elec, self.qubits = n_elec, 2 * norb
+        self.singles, self.doubles = qml.qchem.excitations(n_elec, 2 * norb)
         return E_nuc, h_MO, I_MO, n_elec, norb
 
     def _wrap_angles(self, p):
@@ -843,14 +849,17 @@ class NOFVQE:
 # Run the calculation
 # =========================
 if __name__ == "__main__":
-    xyz_file = "h2_bohr.xyz"
-    functional="vqe"
+    xyz_file = "lih_bohr.xyz"
+    #xyz_file = "h2_bohr.xyz"
+    functional="pnof4"
+    #functional="vqe"
     conv_tol=1e-7
     #init_param=0.1
-    init_param=[0.1, 0.1, 0.1]
+    init_param=None
     basis='sto-3g'
     max_iterations=500
-    gradient="df_fedorov"
+    gradient="analytics"
+    #gradient="df_fedorov"
     d_shift=1e-4
     C_MO = "guest_C_MO"
     dev="simulator"
