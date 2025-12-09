@@ -100,7 +100,7 @@ class NOFVQE:
         
     def __init__(self, 
                  geometry, 
-                 functional="PNOF4", 
+                 functional="pnof4", 
                  conv_tol=1e-5, 
                  init_param=None, 
                  basis= 'sto-3g', 
@@ -119,7 +119,7 @@ class NOFVQE:
         self.basis = basis
         self.functional = functional
         self.ipnof = None
-        if functional == "PNOF4":
+        if functional == "pnof4":
             self.ipnof = self._func_indix(functional)
         self.conv_tol = conv_tol
         self.max_iterations = max_iterations
@@ -128,12 +128,6 @@ class NOFVQE:
         self.p = pynof.param(self.mol,self.basis)
         self.p.ipnof = self.ipnof
         self.p.RI = True
-        # self.init_param_default = 0.1
-        # if init_param is not None:
-        #     self.init_param = init_param
-        # else:
-        #     self.init_param = self.init_param_default
-        self.init_param = None
         self.opt_param = None
         self.opt_rdm1 = None
         self.opt_n = None
@@ -159,6 +153,21 @@ class NOFVQE:
             self.optimization_level = optimization_level
             self.resilience_level = resilience_level
         self.opt_circ = opt_circ
+        self.E_nuc, self.h_MO, self.I_MO, self.n_elec, self.norb = self._mo_integrals(self.crd)
+        self.init_param = self._initial_params(init_param)
+            
+    # ---------------- Generate initial Parameters ----------------
+    def _initial_params(self, params):
+        if params is None:
+            print("Params is none:", params)
+            n_params = len(self.singles) + len(self.doubles)
+            #params = np.random.normal(scale=0.05, size=n_params)
+            #print("Params after random values:", params)
+            params = np.full(n_params, 0.1)
+            print("Params after fill with 0.1 value:", params)
+        else:
+            print("Params is not none:", params)
+        return params
 
 
     # ---------------- Ansatz ----------------
@@ -167,14 +176,7 @@ class NOFVQE:
         qml.DoubleExcitation(params, wires=[0, 1, 2, 3])
 
     # ---------------- Ansatz 2----------------
-    def _ansatz_2(self, params, hf_state, qubits, n_elec):
-        # if params is None:
-        #     singles, doubles = qml.qchem.excitations(n_elec, qubits)
-        #     print("Number of single excitations: ", len(singles))
-        #     print("Number of double excitations: ", len(doubles))
-        #     n_params = len(singles) + len(doubles)
-        #     params = np.random.normal(scale=0.05, size=n_params) 
-        # prepares reference state
+    def _ansatz_2(self, params, hf_state, qubits):
         qml.BasisState(hf_state, wires=range(qubits))
         # apply all single excitations
         i = -1
@@ -267,9 +269,10 @@ class NOFVQE:
         max_retries = 10
         retry_delay = 5
         qubits = 2 * norb
-        print("Before attempt dev:")
+        print("Number of qubits:", qubits)
         hf_state = [1] * n_elec + [0] * (qubits - n_elec)
         if self.dev in ["simulator", "hybrid"]:
+            print("Calling simulator or hybrid:")
             # Hybrid mode uses simulator device for initial optimization
             dev = qml.device("lightning.qubit", wires=qubits)
         else:
@@ -287,6 +290,7 @@ class NOFVQE:
             for attempt in range(max_retries):
                 try:
                     if self.dev == "noise_simulator":
+                        print("Calling noise_simulator:")
                         # Load fake IBM backend and build noisy simulator
                         from qiskit_aer import AerSimulator
                         backend = self._ibm_service.backend("ibm_pittsburgh")
@@ -299,6 +303,7 @@ class NOFVQE:
                         statevector_parallel_threshold = 16,
                         )
                     elif self.dev == "real":
+                        print("Calling real QC:")
                         # Choose explicitly if region has only one backend
                         if region == "eu-de":
                             backend = self._ibm_service.backend("ibm_basquecountry")
@@ -332,7 +337,7 @@ class NOFVQE:
         @qml.qnode(dev, interface="jax")
         def rdm1_qnode(theta):
             #self._ansatz(theta, hf_state, qubits)
-            self._ansatz_2(theta, hf_state, qubits, n_elec)
+            self._ansatz_2(theta, hf_state, qubits)
             return [qml.expval(op) for op in self._build_rdm1_ops(norb)]
 
         params = jnp.atleast_1d(jnp.asarray(params))
@@ -351,24 +356,23 @@ class NOFVQE:
             coordinates=crd,
             unit = self.units
             )
-        qubits = [0,1,2,3]
+        H, qubits  = qml.qchem.molecular_hamiltonian(self.pl_mol)
+        print("Number of qubits:", qubits)
         dev = qml.device("lightning.qubit", wires=qubits)
         @qml.qnode(dev, interface="jax")
         def hf_qnode(theta):
             qml.BasisState(np.array([1, 1, 0, 0]), wires=range(4))
             qml.DoubleExcitation(theta, wires=qubits)
-            H = qml.qchem.molecular_hamiltonian(self.pl_mol, args=[crd])[0]
             return qml.expval(H)
         val = hf_qnode(params)       
         val = jnp.squeeze(val)     
         return val, None, None, None, None, None
 
-    def ene_pnof4(self, params, crds, rdm1=None):
+    def ene_pnof4(self, params, rdm1=None):
         # Functions based on 1-RDM (J. Chem. Theory Comput. 2025, 21, 5, 2402–2413) and taked from the following repository:
         # https://github.com/felipelewyee/NOF-VQE
         
-        E_nuc, h_MO, I_MO, n_elec, norb = self._mo_integrals(crds) 
-        
+        E_nuc, h_MO, I_MO, n_elec, norb = self.E_nuc, self.h_MO, self.I_MO, self.n_elec, self.norb
         # Fermi level
         F = int(n_elec / 2)
 
@@ -377,12 +381,7 @@ class NOFVQE:
         n, vecs = self._get_no_on(rdm1,norb)
         h = 1 - n
         S_F = jnp.sum(n[F:])
-        
-        if self.random_init_params:
-            n_params = len(self.singles) + len(self.doubles)
-            params = np.random.normal(scale=0.05, size=n_params)
 
-    
         h_NO = jnp.einsum("ij,ip,jq->pq", h_MO, vecs, vecs, optimize=True)
         J_NO = jnp.einsum("ijkl,ip,jq,kq,lp->pq", I_MO, vecs, vecs, vecs, vecs, optimize=True)
         K_NO = jnp.einsum("ijkl,ip,jp,kq,lq->pq", I_MO, vecs, vecs, vecs, vecs, optimize=True)
@@ -440,10 +439,11 @@ class NOFVQE:
     # Circuit optimizers
     # =========================
 
-    def _vqe_opt_pennylane(self, E_fn, method, params, crds, max_iterations):
+    def _vqe_opt_pennylane(self, E_fn, method, params, max_iterations):
         """VQE optimization using SPSA"""
         # Choose optimizer
         # The selected hyperparameters are Pennylane's default.
+
         if method == "spsa":
             
             opt = qml.SPSAOptimizer(
@@ -460,7 +460,7 @@ class NOFVQE:
         params_history = []
 
         def cost_fn(p):
-            E_val, _, _, _, _, _ = E_fn(p, crds)
+            E_val, _, _, _, _, _ = E_fn(p)
             return E_val
         
         for n in range(max_iterations):
@@ -474,15 +474,16 @@ class NOFVQE:
                 break
 
         # Evaluate final rdm1 and other quantities
-        _, rdm1_val, n_val, vecs_val, cj12_val, ck12_val = E_fn(params, crds)
+        _, rdm1_val, n_val, vecs_val, cj12_val, ck12_val = E_fn(params)
         return E_history, params_history, [rdm1_val], [n_val], [vecs_val], [cj12_val], [ck12_val]
 
 
-    def _vqe_optax(self, E_fn, method, params, crds, max_iterations):
+    def _vqe_optax(self, E_fn, method, params, max_iterations):
         """
         VQE optimization using:
             SGD and ADAM
         """
+
         # choose optimizer
         if method == "adam":
             opt = optax.adam(learning_rate=0.05)
@@ -493,10 +494,8 @@ class NOFVQE:
         
         opt_state = opt.init(params)
         
-        # energy function that depends only on params (geometry fixed)
-        E_single = lambda p: E_fn(p, crds)
         # evaluate once
-        E0, rdm1_0, n, vecs, cj12, ck12 = E_single(params)
+        E0, rdm1_0, n, vecs, cj12, ck12 = E_fn(params)
 
         E_history = [E0]
         rdm1_history = [rdm1_0]
@@ -508,14 +507,13 @@ class NOFVQE:
         
         for it in range(max_iterations):
         
-            # gradient only w.r.t. params, so we take the first component (energy)
-            grad_fn = lambda p: E_fn(p, crds)[0]
-            gradient = jax.grad(grad_fn)(params)
+
+            gradient = jax.grad(E_fn)(params)
         
             updates, opt_state = opt.update(gradient, opt_state)
             params = optax.apply_updates(params, updates)
 
-            E_val, rdm1_val, n_val, vecs_val, cj12_val, ck12_val = E_single(params)
+            E_val, rdm1_val, n_val, vecs_val, cj12_val, ck12_val = E_fn(params)
 
             params_history.append(params)
             E_history.append(E_val)
@@ -535,15 +533,16 @@ class NOFVQE:
         return E_history, params_history, rdm1_history, n_history, vecs_history, cj12_history, ck12_history
 
 
-    def _vqe_opt_scipy(self, E_fn, method, params, crds, max_iterations):
+    def _vqe_opt_scipy(self, E_fn, method, params, max_iterations):
         """
         VQE optimization using:
             SLSQP, L-BFGS-B and COBYLA
         """
+
         # Define wrappers for scipy
         def E_scipy(x):
             x = jnp.array(x)  # ensure JAX array
-            E_val, _, _, _, _, _ = E_fn(x, crds)
+            E_val, _, _, _, _, _ = E_fn(x)
             return float(E_val)
         
         # If running on a real/remote backend, do NOT supply an analytic jacobian to SciPy.
@@ -554,7 +553,7 @@ class NOFVQE:
         if use_analytic_jac:
             def grad_scipy(x):
                 x = jnp.array(x)  # ensure JAX array
-                grad_fn = lambda p: E_fn(p, crds)[0]
+                grad_fn = lambda p: E_fn(p)[0]
                 # This will call jax.grad - only safe on local simulator
                 g = jax.grad(grad_fn)(x)
                 return np.array(g, dtype=float)
@@ -577,17 +576,18 @@ class NOFVQE:
         res_x = np.asarray(res.x, dtype=float)
         res_x_wrapped = self._wrap_angles(res_x)
 
-        E_val, rdm1_val, n_val, vecs_val, cj12_val, ck12_val = E_fn(jnp.array(res_x_wrapped), crds)
+        E_val, rdm1_val, n_val, vecs_val, cj12_val, ck12_val = E_fn(jnp.array(res_x_wrapped))
         return [E_val], [res.x], [rdm1_val], [n_val], [vecs_val], [cj12_val], [ck12_val]
     
-    def _vqe_cmaes(self, E_fn, params, crds, max_iterations):
+    def _vqe_cmaes(self, E_fn, params, max_iterations):
         """VQE optimization using CMA-ES."""
+        
         # --- Ensure params are 1D ---
         params = np.atleast_1d(np.array(params, dtype=float)).flatten()
         
         # Define cost function (energy only)
         def cost_fn(p):
-            E_val, _, _, _, _, _ = E_fn(np.array(p), crds)
+            E_val, _, _, _, _, _ = E_fn(np.array(p))
             return float(E_val)
         
         # Initial standard deviation (step size)
@@ -616,29 +616,26 @@ class NOFVQE:
                 break
         
         # Final evaluation
-        _, rdm1_val, n_val, vecs_val, cj12_val, ck12_val = E_fn(best_params, crds)
+        _, rdm1_val, n_val, vecs_val, cj12_val, ck12_val = E_fn(best_params)
         return E_history, params_history, [rdm1_val], [n_val], [vecs_val], [cj12_val], [ck12_val]
     
     # =========================
     # Energy minimization
     # =========================
 
-    def _vqe(self, E_fn, params, crds, method=None, max_iterations=None):
-        self.random_init_params = False
-        if params is None:
-            self.random_init_params = True
+    def _vqe(self, E_fn, params, method=None, max_iterations=None):
         if method is None:
             method=self.opt_circ
         if max_iterations is None:
             max_iterations = self.max_iterations
         if method.lower() in ["sgd", "adam"]:
-            return self._vqe_optax(E_fn, method, params, crds, max_iterations)
+            return self._vqe_optax(E_fn, method, params, max_iterations)
         elif method.lower() in ["slsqp", "l-bfgs-b", "cobyla"]:
-            return self._vqe_opt_scipy(E_fn, method, params, crds, max_iterations)
+            return self._vqe_opt_scipy(E_fn, method, params, max_iterations)
         elif method == "spsa":
-            return self._vqe_opt_pennylane(E_fn, method, params, crds, max_iterations)
+            return self._vqe_opt_pennylane(E_fn, method, params, max_iterations)
         elif method == "cmaes":
-            return self._vqe_cmaes(E_fn, params, crds, max_iterations)
+            return self._vqe_cmaes(E_fn, params, max_iterations)
         else:
             raise ValueError(
                 f"Optimizer method {method} not implemented. Choose: 'adam', 'sgd', 'spsa', 'sgd', 'slsqp', or 'l-bfgs-b'."
@@ -648,7 +645,7 @@ class NOFVQE:
         if self.functional == "vqe":
             method_opt = "slsqp"
             print("==== HF_VQE ====")
-            res = self._vqe_opt_scipy(self.ene_hf, method_opt, self.init_param, self.crd, self.max_iterations)
+            res = self._vqe_opt_scipy(self.ene_hf, method_opt, self.init_param, self.max_iterations)
 
             # res can be a tuple/list of length >= 2:
             # ([E_history], [params_history], [rdm1_history], [n_history], [vecs_history], ...)
@@ -666,7 +663,7 @@ class NOFVQE:
             return E_final, params_final, None, None, None, None, None
         elif self.functional == "pnof4":
             E_history, params_history, rdm1_history, n_history, vecs_history, cj12_history, ck12_history = self._vqe(
-                self.ene_pnof4, self.init_param, self.crd
+                self.ene_pnof4, self.init_param
                 )
             self.opt_param = params_history[-1]
             self.opt_rdm1 = rdm1_history[-1]
@@ -692,7 +689,7 @@ class NOFVQE:
                 # E_hybrid, params_hybrid, rdm1_hybrid, n_hybrid, vecs_hybrid, cj12_hybrid, ck12_hybrid = self._vqe(
                 #     self.ene_pnof4, self.opt_param, self.crd, max_iterations=1)
                 E_hybrid, rdm1_hybrid, n_hybrid, vecs_hybrid, cj12_hybrid, ck12_hybrid = self.ene_pnof4(
-                    self.opt_param, self.crd)
+                    self.opt_param)
                 print("==== Hybrid mode activated ====")
                 print("Devise: ",str(self.dev))
                 print("Opt_circ: ",self.opt_circ)
@@ -748,13 +745,14 @@ class NOFVQE:
                 crds_plus[a, xyz] = crds[a, xyz] + d_shift
                 crds_minus[a, xyz] = crds[a, xyz] - d_shift
 
-                if self.functional != "PNOF4":
+                if self.functional != "pnof4":
                     E_plus, _, _, _, _, _ = self.ene_hf(params, crds_plus)
                     E_minus, _, _, _, _, _ = self.ene_hf(params, crds_minus)
                 else:
-                    E_plus, _, _, _, _, _ = self.ene_pnof4(params, crds_plus, rdm1=rdm1_opt)
-                    E_minus, _, _, _, _, _ = self.ene_pnof4(params, crds_minus, rdm1=rdm1_opt)
-
+                    self.E_nuc, self.h_MO, self.I_MO, self.n_elec, self.norb = self._mo_integrals(crds_plus)
+                    E_plus, _, _, _, _, _ = self.ene_pnof4(params, rdm1=rdm1_opt)
+                    self.E_nuc, self.h_MO, self.I_MO, self.n_elec, self.norb = self._mo_integrals(crds_minus)
+                    E_minus, _, _, _, _, _ = self.ene_pnof4(params, rdm1=rdm1_opt)
                 grad[a, xyz] = (E_plus - E_minus) / (2 * d_shift)
         return grad
 
@@ -790,8 +788,14 @@ class NOFVQE:
                 p_start_plus = params_p if warm_start else self.init_param
                 p_start_minus = params_m if warm_start else self.init_param
 
-                E_plus, p_plus, _, _, _, _, _ = self._vqe(self.ene_pnof4, p_start_plus, crds_plus)
-                E_minus, p_minus, _, _, _, _, _ = self._vqe(self.ene_pnof4, p_start_minus, crds_minus)
+                if self.functional != "pnof4":
+                    E_plus, _, _, _, _, _ = self.ene_hf(params, crds_plus)
+                    E_minus, _, _, _, _, _ = self.ene_hf(params, crds_minus)
+                else:
+                    self.E_nuc, self.h_MO, self.I_MO, self.n_elec, self.norb = self._mo_integrals(crds_plus)
+                    E_plus, p_plus, _, _, _, _, _ = self._vqe(self.ene_pnof4, p_start_plus)
+                    self.E_nuc, self.h_MO, self.I_MO, self.n_elec, self.norb = self._mo_integrals(crds_minus)
+                    E_minus, p_minus, _, _, _, _, _ = self._vqe(self.ene_pnof4, p_start_minus)
 
                 # Optional: update warm-start for the next coordinate
                 if warm_start:
@@ -858,8 +862,8 @@ class NOFVQE:
 # Run the calculation
 # =========================
 if __name__ == "__main__":
-    xyz_file = "lih_bohr.xyz"
-    #xyz_file = "h2_bohr.xyz"
+    #xyz_file = "lih_bohr.xyz"
+    xyz_file = "h2_bohr.xyz"
     functional="pnof4"
     #functional="vqe"
     conv_tol=1e-7
