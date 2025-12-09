@@ -160,6 +160,7 @@ class NOFVQE:
             self.resilience_level = resilience_level
         self.opt_circ = opt_circ
 
+
     # ---------------- Ansatz ----------------
     def _ansatz(self, params, hf_state, qubits):
         qml.BasisState(hf_state, wires=range(qubits))
@@ -167,21 +168,21 @@ class NOFVQE:
 
     # ---------------- Ansatz 2----------------
     def _ansatz_2(self, params, hf_state, qubits, n_elec):
-        singles, doubles = self.singles, self.doubles
-        #singles, doubles = qml.qchem.excitations(n_elec, qubits)
-        print("Number of single excitations: ", len(singles))
-        print("Number of double excitations: ", len(doubles))
-        n_params = len(singles) + len(doubles)
-        params = np.random.normal(scale=0.05, size=n_params) 
+        # if params is None:
+        #     singles, doubles = qml.qchem.excitations(n_elec, qubits)
+        #     print("Number of single excitations: ", len(singles))
+        #     print("Number of double excitations: ", len(doubles))
+        #     n_params = len(singles) + len(doubles)
+        #     params = np.random.normal(scale=0.05, size=n_params) 
         # prepares reference state
         qml.BasisState(hf_state, wires=range(qubits))
         # apply all single excitations
         i = -1
-        for s in singles:
+        for s in self.singles:
             i = i + 1
             qml.SingleExcitation(params[i], wires=s)
         # apply all double excitations
-        for d in doubles:
+        for d in self.doubles:
             i = i + 1
             qml.DoubleExcitation(params[i], wires=d)
 
@@ -250,6 +251,8 @@ class NOFVQE:
             E_nuc, h_MO, I_MO, n_elec, norb = self._mo_integrals_pennylane(crd)
         # self.n_elec, self.qubits = n_elec, 2 * norb
         self.singles, self.doubles = qml.qchem.excitations(n_elec, 2 * norb)
+        print("Singles:", self.singles)
+        print("Doubles:", self.doubles)
         return E_nuc, h_MO, I_MO, n_elec, norb
 
     def _wrap_angles(self, p):
@@ -374,6 +377,10 @@ class NOFVQE:
         n, vecs = self._get_no_on(rdm1,norb)
         h = 1 - n
         S_F = jnp.sum(n[F:])
+        
+        if self.random_init_params:
+            n_params = len(self.singles) + len(self.doubles)
+            params = np.random.normal(scale=0.05, size=n_params)
 
     
         h_NO = jnp.einsum("ij,ip,jq->pq", h_MO, vecs, vecs, optimize=True)
@@ -575,7 +582,6 @@ class NOFVQE:
     
     def _vqe_cmaes(self, E_fn, params, crds, max_iterations):
         """VQE optimization using CMA-ES."""
-        
         # --- Ensure params are 1D ---
         params = np.atleast_1d(np.array(params, dtype=float)).flatten()
         
@@ -618,6 +624,9 @@ class NOFVQE:
     # =========================
 
     def _vqe(self, E_fn, params, crds, method=None, max_iterations=None):
+        self.random_init_params = False
+        if params is None:
+            self.random_init_params = True
         if method is None:
             method=self.opt_circ
         if max_iterations is None:
