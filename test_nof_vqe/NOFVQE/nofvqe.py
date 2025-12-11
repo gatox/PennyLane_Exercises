@@ -139,6 +139,7 @@ class NOFVQE:
         self.I_ao = None 
         self.b_mnl = None
         self.C = None
+        self.icall = 0
         if self.gradient == "analytics" and C_MO == "guest_C_MO":
             print("searching for C_MO guest")
             file = "pynof_C.npy"
@@ -163,6 +164,15 @@ class NOFVQE:
         else:
             self.E_nuc, self.h_MO, self.I_MO, self.n_elec, self.norb = self._mo_integrals(self.crd)
             self.init_param = self._initial_params(init_param)
+            # if self.icall == 0:
+            #     self.init_param = self._initial_params(init_param)
+            #     self.icall = 1
+            # else:
+            #     if not np.allclose(self.init_param, init_param): 
+            #         self.init_param = init_param
+            #     else:
+            #         params = None
+            #         self.init_param = self._initial_params(params)
             
     # ---------------- Generate initial Parameters ----------------
     def _initial_params(self, params):
@@ -886,7 +896,7 @@ class NOFVQE:
 # =========================
 if __name__ == "__main__":
     #xyz_file = "lih_bohr.xyz"
-    xyz_file = "h2_bohr.xyz"
+    xyz_file = "h2_bohr_test.xyz"
     functional="pnof4"
     #functional="vqe"
     conv_tol=1e-7
