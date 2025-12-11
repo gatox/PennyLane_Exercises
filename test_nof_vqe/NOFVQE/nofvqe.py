@@ -153,8 +153,16 @@ class NOFVQE:
             self.optimization_level = optimization_level
             self.resilience_level = resilience_level
         self.opt_circ = opt_circ
-        self.E_nuc, self.h_MO, self.I_MO, self.n_elec, self.norb = self._mo_integrals(self.crd)
-        self.init_param = self._initial_params(init_param)
+        if self.functional != "pnof4":
+            self.pl_mol = qml.qchem.Molecule(
+            symbols=self.symbols,
+            coordinates=self.crd,
+            unit = self.units
+            )
+            self.init_param = 0.1
+        else:
+            self.E_nuc, self.h_MO, self.I_MO, self.n_elec, self.norb = self._mo_integrals(self.crd)
+            self.init_param = self._initial_params(init_param)
             
     # ---------------- Generate initial Parameters ----------------
     def _initial_params(self, params):
@@ -350,19 +358,14 @@ class NOFVQE:
         
         return rdm1
     
-    def ene_hf(self, params, crd):
-        self.pl_mol = qml.qchem.Molecule(
-            symbols=self.symbols,
-            coordinates=crd,
-            unit = self.units
-            )
+    def ene_hf(self, params):
         H, qubits  = qml.qchem.molecular_hamiltonian(self.pl_mol)
         print("Number of qubits:", qubits)
         dev = qml.device("lightning.qubit", wires=qubits)
         @qml.qnode(dev, interface="jax")
         def hf_qnode(theta):
             qml.BasisState(np.array([1, 1, 0, 0]), wires=range(4))
-            qml.DoubleExcitation(theta, wires=qubits)
+            qml.DoubleExcitation(theta, wires=[0, 1, 2, 3])
             return qml.expval(H)
         val = hf_qnode(params)       
         val = jnp.squeeze(val)     
@@ -746,8 +749,18 @@ class NOFVQE:
                 crds_minus[a, xyz] = crds[a, xyz] - d_shift
 
                 if self.functional != "pnof4":
-                    E_plus, _, _, _, _, _ = self.ene_hf(params, crds_plus)
-                    E_minus, _, _, _, _, _ = self.ene_hf(params, crds_minus)
+                    self.pl_mol = qml.qchem.Molecule(
+                        symbols=self.symbols,
+                        coordinates=crds_plus,
+                        unit = self.units
+                        )
+                    E_plus, _, _, _, _, _ = self.ene_hf(params)
+                    self.pl_mol = qml.qchem.Molecule(
+                        symbols=self.symbols,
+                        coordinates=crds_minus,
+                        unit = self.units
+                        )
+                    E_minus, _, _, _, _, _ = self.ene_hf(params)
                 else:
                     self.E_nuc, self.h_MO, self.I_MO, self.n_elec, self.norb = self._mo_integrals(crds_plus)
                     E_plus, _, _, _, _, _ = self.ene_pnof4(params, rdm1=rdm1_opt)
@@ -789,8 +802,18 @@ class NOFVQE:
                 p_start_minus = params_m if warm_start else self.init_param
 
                 if self.functional != "pnof4":
-                    E_plus, _, _, _, _, _ = self.ene_hf(params, crds_plus)
-                    E_minus, _, _, _, _, _ = self.ene_hf(params, crds_minus)
+                    self.pl_mol = qml.qchem.Molecule(
+                        symbols=self.symbols,
+                        coordinates=crds_plus,
+                        unit = self.units
+                        )
+                    E_plus, _, _, _, _, _ = self.ene_hf(params)
+                    self.pl_mol = qml.qchem.Molecule(
+                        symbols=self.symbols,
+                        coordinates=crds_minus,
+                        unit = self.units
+                        )
+                    E_minus, _, _, _, _, _ = self.ene_hf(params)
                 else:
                     self.E_nuc, self.h_MO, self.I_MO, self.n_elec, self.norb = self._mo_integrals(crds_plus)
                     E_plus, p_plus, _, _, _, _, _ = self._vqe(self.ene_pnof4, p_start_plus)
