@@ -271,8 +271,6 @@ class NOFVQE:
             E_nuc, h_MO, I_MO, n_elec, norb = self._mo_integrals_pennylane(crd)
         # self.n_elec, self.qubits = n_elec, 2 * norb
         self.singles, self.doubles = qml.qchem.excitations(n_elec, 2 * norb)
-        print("Singles:", self.singles)
-        print("Doubles:", self.doubles)
         return E_nuc, h_MO, I_MO, n_elec, norb
 
     def _wrap_angles(self, p):
@@ -287,7 +285,6 @@ class NOFVQE:
         max_retries = 10
         retry_delay = 5
         qubits = 2 * norb
-        print("Number of qubits:", qubits)
         hf_state = [1] * n_elec + [0] * (qubits - n_elec)
         if self.dev in ["simulator", "hybrid"]:
             print("Calling simulator or hybrid:")
@@ -359,7 +356,6 @@ class NOFVQE:
             return [qml.expval(op) for op in self._build_rdm1_ops(norb)]
 
         params = jnp.atleast_1d(jnp.asarray(params))
-        print("Calling _rdm1_from_circuit:")
         
         rdm1 = jnp.array(rdm1_qnode(params))
         # Flatten rdm1 if using SLSQP or L-BFGS-B
@@ -506,6 +502,12 @@ class NOFVQE:
             raise ValueError(f"Unknown optax method: {method}")
         
         opt_state = opt.init(params)
+
+
+        # scalar energy function for JAX
+        def energy_only(p):
+            E = E_fn(p)[0]
+            return jnp.asarray(E).reshape(())
         
         # evaluate once
         E0, rdm1_0, n, vecs, cj12, ck12 = E_fn(params)
@@ -519,9 +521,8 @@ class NOFVQE:
         ck12_history = [ck12]
         
         for it in range(max_iterations):
-        
 
-            gradient = jax.grad(E_fn)(params)
+            gradient = jax.grad(energy_only)(params)
         
             updates, opt_state = opt.update(gradient, opt_state)
             params = optax.apply_updates(params, updates)
@@ -544,7 +545,6 @@ class NOFVQE:
                 break
 
         return E_history, params_history, rdm1_history, n_history, vecs_history, cj12_history, ck12_history
-
 
     def _vqe_opt_scipy(self, E_fn, method, params, max_iterations):
         """
@@ -576,6 +576,30 @@ class NOFVQE:
             jac = None  # COBYLA doesn't use gradients
 
         bounds = [(-np.pi, np.pi) for _ in range(len(np.atleast_1d(params)))]
+
+        iter_counter = {"i": 0}
+        # this function prints the values per iterations, however, 
+        # it computes the 1rdm two times more, so it is not recommended 
+        # to use it in a real QC
+        def callback(xk):
+            x = jnp.array(xk)
+            E_val, *_ = E_fn(x)
+
+            if jac is not None:
+                g = jac(xk)
+                g_maxabs = np.max(np.abs(g))
+                print(
+                    f"Step = {iter_counter['i']}, "
+                    f"Energy = {float(E_val):.8f} Ha, "
+                    f"Gradient = {g_maxabs:.1e}"
+                )
+            else:
+                print(
+                    f"Step = {iter_counter['i']}, "
+                    f"Energy = {float(E_val):.8f} Ha"
+                )
+
+            iter_counter["i"] += 1
         res = minimize(
             E_scipy,
             np.array(params, dtype=float),
@@ -584,6 +608,7 @@ class NOFVQE:
             bounds=bounds,
             tol=self.conv_tol,
             options={"maxiter": max_iterations},
+            #callback=callback,
         )
         
         res_x = np.asarray(res.x, dtype=float)
