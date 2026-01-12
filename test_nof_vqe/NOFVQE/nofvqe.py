@@ -271,6 +271,10 @@ class NOFVQE:
             E_nuc, h_MO, I_MO, n_elec, norb = self._mo_integrals_pennylane(crd)
         # self.n_elec, self.qubits = n_elec, 2 * norb
         self.singles, self.doubles = qml.qchem.excitations(n_elec, 2 * norb)
+        print("Size Singles:",len(self.singles))
+        print("Singles:",self.singles)
+        print("Size Doubles:",len(self.doubles))
+        print("Doubles:",self.doubles)
         return E_nuc, h_MO, I_MO, n_elec, norb
 
     def _wrap_angles(self, p):
@@ -920,8 +924,8 @@ class NOFVQE:
 # Run the calculation
 # =========================
 if __name__ == "__main__":
-    #xyz_file = "lih_bohr.xyz"
-    xyz_file = "h2_bohr_test.xyz"
+    xyz_file = "lih_bohr.xyz"
+    #xyz_file = "h2_bohr.xyz"
     functional="pnof4"
     #functional="vqe"
     conv_tol=1e-7
@@ -957,12 +961,13 @@ if __name__ == "__main__":
     # Run VQE
     # E_h, params_h, rdm1_h, n_h, vecs_h, cj12_h, ck12_h=cal._vqe(cal.ene_pnof4, init_param, crds, method="adam")
     # Run NOF-VQE
-    E_min, params_opt, rdm1_opt, n, vecs, cj12, ck12 = cal.ene_vqe()
-    print("Min Ene VQE and param:", E_min, params_opt)
-    print("params_opt:", params_opt)
-    print("rdm1_opt:", rdm1_opt)
-    print("n_opt:", n)
-    print("vecs_opt:", vecs)
-    # Nuclear gradient
-    grad = cal.grad()
-    print(f"Nuclear gradient ({gradient}):\n", grad)  
+    # E_min, params_opt, rdm1_opt, n, vecs, cj12, ck12 = cal.ene_vqe()
+    # print("Min Ene VQE and param:", E_min, params_opt)
+    # print("params_opt:", params_opt)
+    # print("rdm1_opt:", rdm1_opt)
+    # print("n_opt:", n)
+    # print("vecs_opt:", vecs)
+    # # Nuclear gradient
+    # grad = cal.grad()
+    # print(f"Nuclear gradient ({gradient}):\n", grad)  
+    print("Crd:",cal.crd)
