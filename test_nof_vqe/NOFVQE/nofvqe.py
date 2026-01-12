@@ -139,6 +139,7 @@ class NOFVQE:
         self.I_ao = None 
         self.b_mnl = None
         self.C = None
+        self.energy_scale = 1e3  # mHa
         self.icall = 0
         if self.gradient == "analytics" and C_MO == "guest_C_MO":
             print("searching for C_MO guest")
@@ -164,15 +165,6 @@ class NOFVQE:
         else:
             self.E_nuc, self.h_MO, self.I_MO, self.n_elec, self.norb = self._mo_integrals(self.crd)
             self.init_param = self._initial_params(init_param)
-            # if self.icall == 0:
-            #     self.init_param = self._initial_params(init_param)
-            #     self.icall = 1
-            # else:
-            #     if not np.allclose(self.init_param, init_param): 
-            #         self.init_param = init_param
-            #     else:
-            #         params = None
-            #         self.init_param = self._initial_params(params)
             
     # ---------------- Generate initial Parameters ----------------
     def _initial_params(self, params):
@@ -560,7 +552,7 @@ class NOFVQE:
         def E_scipy(x):
             x = jnp.array(x)  # ensure JAX array
             E_val, _, _, _, _, _ = E_fn(x)
-            return float(E_val)
+            return float(E_val* self.energy_scale)
         
         # If running on a real/remote backend, do NOT supply an analytic jacobian to SciPy.
         # SciPy will use finite differences (function evaluations only) which is robust.
@@ -611,7 +603,11 @@ class NOFVQE:
             jac=jac,
             bounds=bounds,
             tol=self.conv_tol,
-            options={"maxiter": max_iterations},
+            options={
+                "maxiter": max_iterations,
+                "ftol": self.conv_tol,   # keep it
+                "eps": 1e-8,             # critical
+            },
             #callback=callback,
         )
         
