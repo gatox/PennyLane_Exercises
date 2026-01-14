@@ -215,6 +215,17 @@ class NOFVQE:
                 ops.append(cpaq)
         return ops
     
+    # ---------------- Filter pair ansatz ----------------
+    def _filter_pair_doubles(self, doubles):
+        pair_doubles = []
+        for d in doubles:
+            i, j, a, b = d
+            if (j == i + 1) and (b == a + 1):
+                if (i % 2 == 0) and (a % 2 == 0):
+                    pair_doubles.append(d)
+        return pair_doubles
+
+    
     # ---------- integrals at a geometry (MO basis) from pennylane ----------
     def _mo_integrals_pennylane(self, crd):
         """Return (E_nuc, h_MO, I_MO, n_electrons, norb) at given geometry (bohr)."""
@@ -256,13 +267,21 @@ class NOFVQE:
         n_elec = p.ne
         return jnp.array(E_nuc), jnp.array(h_MO), jnp.array(I_MO), n_elec, norb
     
-    def _mo_integrals(self, crd):
+    def _mo_integrals(self, crd, pair_doubles_only = True):
         if self.gradient == "analytics":
             E_nuc, h_MO, I_MO, n_elec, norb = self._mo_integrals_pynof()
         else:
             E_nuc, h_MO, I_MO, n_elec, norb = self._mo_integrals_pennylane(crd)
-        # self.n_elec, self.qubits = n_elec, 2 * norb
+            
         self.singles, self.doubles = qml.qchem.excitations(n_elec, 2 * norb)
+        
+        if pair_doubles_only:
+            # Kill singles completely (seniority-zero ansatz)
+            self.singles = []
+
+            # Keep only pair doubles
+            self.doubles = self._filter_pair_doubles(self.doubles)   
+        
         print("Size Singles:",len(self.singles))
         print("Singles:",self.singles)
         print("Size Doubles:",len(self.doubles))
@@ -920,8 +939,8 @@ class NOFVQE:
 # Run the calculation
 # =========================
 if __name__ == "__main__":
-    xyz_file = "lih_bohr.xyz"
-    #xyz_file = "h2_bohr.xyz"
+    #xyz_file = "lih_bohr.xyz"
+    xyz_file = "h2_bohr.xyz"
     functional="pnof4"
     #functional="vqe"
     conv_tol=1e-7
