@@ -73,23 +73,30 @@ class NOFVQE:
         return units, charge, multiplicity, symbols, geometry, mol
 
     @staticmethod
-    def _get_no_on(rdm1, norb):
-
-        rdm1_aa = jnp.zeros((norb, norb))
-    
-        i = -1
-        for p in range(0, norb):
-            for q in range(p, norb):
-                i = i + 1
-                val = jnp.squeeze(rdm1[i])
-                rdm1_aa = rdm1_aa.at[p, q].set(val)
-                rdm1_aa = rdm1_aa.at[q, p].set(val)
-    
-        n, vecs = jnp.linalg.eigh(rdm1_aa)
-    
-        n = n[::-1]
-        vecs = vecs[:, ::-1]
-    
+    def _get_no_on(rdm1, norb, pair_doubles):
+        if pair_doubles:
+            rdm1 = 0.5 * (rdm1 + rdm1.T)   # Hermitianize
+            
+            # occupation numbers are the diagonal
+            n = jnp.diag(rdm1)
+            
+            # natural orbitals are already the basis
+            vecs = jnp.eye(norb)
+        else:
+            rdm1_aa = jnp.zeros((norb, norb))
+        
+            i = -1
+            for p in range(0, norb):
+                for q in range(p, norb):
+                    i = i + 1
+                    val = jnp.squeeze(rdm1[i])
+                    rdm1_aa = rdm1_aa.at[p, q].set(val)
+                    rdm1_aa = rdm1_aa.at[q, p].set(val)
+        
+            n, vecs = jnp.linalg.eigh(rdm1_aa)
+        
+            n = n[::-1]
+            vecs = vecs[:, ::-1]
         return n, vecs
     
     
@@ -108,6 +115,7 @@ class NOFVQE:
                  gradient="analytics",
                  d_shift=1e-4,
                  C_MO=None,
+                 gamma=None,
                  dev="simulator",
                  opt_circ="sgd",
                  n_shots=None,
@@ -141,10 +149,11 @@ class NOFVQE:
         self.C = None
         self.energy_scale = 1e3  # mHa
         self.icall = 0
+        self.pair_doubles = True
         if self.gradient == "analytics" and C_MO == "guest_C_MO":
             print("searching for C_MO guest")
-            file = "pynof_C.npy"
-            if os.path.exists(file):
+            file_C = "pynof_C.npy"
+            if os.path.exists(file_C):
                 print("reading C_MO guest")
                 self.C = pynof.read_C(self.p.title)
             else:
@@ -163,8 +172,11 @@ class NOFVQE:
             )
             self.init_param = 0.1
         else:
-            self.E_nuc, self.h_MO, self.I_MO, self.n_elec, self.norb = self._mo_integrals(self.crd)
-            self.init_param = self._initial_params(init_param)
+            if self.pair_doubles:
+                self.init_param = init_param
+            else:
+                self.E_nuc, self.h_MO, self.I_MO, self.n_elec, self.norb = self._mo_integrals(self.crd)
+                self.init_param = self._initial_params(init_param)
             
     # ---------------- Generate initial Parameters ----------------
     def _initial_params(self, params):
@@ -244,10 +256,127 @@ class NOFVQE:
     def _read_C_MO(self, C,S_ao,p):
         if C is None:
             _, C = eigh(self.H_ao, S_ao)
-        C = pynof.check_ortho(C,S_ao,p)
-        np.save(p.title+"_C.npy",C)
+        C_old = pynof.check_ortho(C,S_ao,p)
+        for i in range(p.ndoc):
+            for j in range(p.ncwo):
+                k = p.no1 + p.ndns + (p.ndoc - i - 1) * p.ncwo + j
+                l = p.no1 + p.ndns + (p.ndoc - i - 1) + j*p.ndoc
+                C[:,l] = C_old[:,k]
+        if not self.pair_doubles:
+            np.save(p.title+"_C.npy",C)
+            print(f"saving {p.title}C.npy")
+        return C_old
+    
+    # def _save_gamma(self, n,p):
+    #     n_old = np.copy(n)
+    #     for i in range(p.ndoc):
+    #         for j in range(p.ncwo):
+    #             k = p.no1 + p.ndns + (p.ndoc - i - 1) * p.ncwo + j
+    #             l = p.no1 + p.ndns + (p.ndoc - i - 1) + j*p.ndoc
+    #             n[l] = n_old[k]
+    #     np.save(p.title+"_n.npy",n)
+    #     print(f"saving {p.title}n.npy")
+    
+    # def _read_gamma(self, n,p):
+    #     if n is None:
+    #         p.nv = p.nbf5 - p.no1 - p.nsoc 
+    #         gamma = pynof.compute_gammas_softmax(p.ndoc,p.ncwo)
+    #     else:
+    #         n_old = np.copy(n)
+    #         for i in range(p.ndoc):
+    #             for j in range(p.ncwo):
+    #                 k = p.no1 + p.ndns + (p.ndoc - i - 1) * p.ncwo + j
+    #                 l = p.no1 + p.ndns + (p.ndoc - i - 1) + j*p.ndoc
+    #                 n[k] = n_old[l]
+    #         p.nv = p.nbf5 - p.no1 - p.nsoc 
+    #         gamma = pynof.n_to_gammas_softmax(n,p.no1,p.ndoc,p.ndns,p.ncwo)
+    #     return gamma
+    
+    def _n_to_gamma_softmax(self, n):
+        """
+        Convert measured occupation numbers n_p into
+        gamma parameters for PyNOF (Softmax scheme).
+        """
+        p = self.p
+
+        # PyNOF expects a full n vector in AO/MO ordering
+        n_np = np.array(n, dtype=float)
+        
+        for i in range(p.ndoc):
+            for j in range(p.ncwo):
+                k = p.no1 + p.ndns + (p.ndoc - i - 1) * p.ncwo + j
+                l = p.no1 + p.ndns + (p.ndoc - i - 1) + j*p.ndoc
+                n[k] = n_np[l]
+        p.nv = p.nbf5 - p.no1 - p.nsoc 
+
+        # Map n -> gamma
+        gamma = pynof.n_to_gammas_softmax(
+            n,
+            p.no1,
+            p.ndoc,
+            p.ndns,
+            p.ncwo
+        )
+        return gamma
+    
+    def _orbital_optimization(self, gamma):
+        """
+        Perform classical orbital optimization using PyNOF.
+        """
+        p = self.p
+        C = self.C_AO_MO
+        H = self.H_ao
+        I = self.I_ao
+        b_mnl = self.b_mnl
+
+        E_orb, C_new, nit, success = pynof.orbopt_adam(
+            gamma, C, H, I, b_mnl, p
+        )
+
+        if not success:
+            print("Warning: orbital optimization did not fully converge")
+
+        # Save updated orbitals
+        self.C_AO_MO = C_new
+        
+        np.save(p.title + "_C.npy", C_new)
         print(f"saving {p.title}C.npy")
-        return C
+
+        return E_orb
+
+    def run_scnofvqe(self, max_outer=10, tol=1e-6):
+        """
+        Self-consistent NOF-VQE loop:
+        VQE amplitudes <-> orbital optimization
+        """
+        gamma = None
+        E_old = None
+        init_param = self.init_param
+        for it in range(max_outer):
+            print(f"\n==== SC-NOFVQE Iteration {it} ====")
+
+            # 1. Build integrals with current orbitals
+            self.E_nuc, self.h_MO, self.I_MO, self.n_elec, self.norb = self._mo_integrals(self.crd)
+            self.init_param = self._initial_params(init_param)
+            # 2. Run VQE (pair-only)
+            E, params, rdm1, n, vecs, cj12, ck12 = self.ene_vqe()
+
+            print(f"VQE energy: {E:.10f} Ha")
+
+            # 3. Convergence check
+            if E_old is not None and abs(E - E_old) < tol:
+                print("SC-NOFVQE converged")
+                break
+            E_old = E
+
+            # 4. Convert occupations -> gamma
+            gamma = self._n_to_gamma_softmax(n)
+
+            # 5. Orbital optimization
+            E_orb = self._orbital_optimization(gamma)
+            print(f"Orbital optimization energy: {E_orb:.10f} Ha")
+            
+        return E, params, rdm1, n, vecs, cj12, ck12
     
     # ---------- integrals at a geometry (MO basis) from pynof ----------
     def _mo_integrals_pynof(self):
@@ -267,7 +396,7 @@ class NOFVQE:
         n_elec = p.ne
         return jnp.array(E_nuc), jnp.array(h_MO), jnp.array(I_MO), n_elec, norb
     
-    def _mo_integrals(self, crd, pair_doubles_only = True):
+    def _mo_integrals(self, crd):
         if self.gradient == "analytics":
             E_nuc, h_MO, I_MO, n_elec, norb = self._mo_integrals_pynof()
         else:
@@ -275,7 +404,7 @@ class NOFVQE:
             
         self.singles, self.doubles = qml.qchem.excitations(n_elec, 2 * norb)
         
-        if pair_doubles_only:
+        if self.pair_doubles:
             # Kill singles completely (seniority-zero ansatz)
             self.singles = []
 
@@ -292,7 +421,6 @@ class NOFVQE:
         p = np.asarray(p, dtype=float)
         # Map each parameter to (-pi, pi]
         return ((p + np.pi) % (2*np.pi)) - np.pi
-
 
     # ---------- measure 1-RDM on the circuit ----------
     #def _rdm1_from_circuit(self, params, n_elec, norb, region="eu-de", allow_fallback=False):
@@ -402,7 +530,7 @@ class NOFVQE:
 
         if rdm1 is None:
             rdm1 = self._rdm1_from_circuit(params, n_elec, norb)
-        n, vecs = self._get_no_on(rdm1,norb)
+        n, vecs = self._get_no_on(rdm1,norb,self.pair_doubles)
         h = 1 - n
         S_F = jnp.sum(n[F:])
 
@@ -939,11 +1067,11 @@ class NOFVQE:
 # Run the calculation
 # =========================
 if __name__ == "__main__":
-    #xyz_file = "lih_bohr.xyz"
-    xyz_file = "h2_bohr.xyz"
+    xyz_file = "lih_bohr.xyz"
+    #xyz_file = "h2_bohr.xyz"
     functional="pnof4"
     #functional="vqe"
-    conv_tol=1e-7
+    conv_tol=1e-8
     #init_param=0.1
     init_param=None
     basis='sto-3g'
@@ -985,4 +1113,6 @@ if __name__ == "__main__":
     # # Nuclear gradient
     # grad = cal.grad()
     # print(f"Nuclear gradient ({gradient}):\n", grad)  
-    print("Crd:",cal.crd)
+    # print("Crd:",cal.crd)
+    E_min, params_opt, rdm1_opt, n, vecs, cj12, ck12 = cal.run_scnofvqe()
+    print("Min Ene VQE and param:", E_min, params_opt)
