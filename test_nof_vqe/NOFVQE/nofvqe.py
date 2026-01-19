@@ -97,6 +97,9 @@ class NOFVQE:
         
             n = n[::-1]
             vecs = vecs[:, ::-1]
+        # print("pair_doubles:",pair_doubles)
+        # print("o_n:",n)
+        # print("n_o:",vecs)
         return n, vecs
     
     
@@ -254,17 +257,20 @@ class NOFVQE:
         return jnp.array(E_nuc), jnp.array(h_MO), jnp.array(I_MO), n_elec, norb
     
     def _read_C_MO(self, C,S_ao,p):
-        if C is None:
-            _, C = eigh(self.H_ao, S_ao)
-        C_old = pynof.check_ortho(C,S_ao,p)
-        for i in range(p.ndoc):
-            for j in range(p.ncwo):
-                k = p.no1 + p.ndns + (p.ndoc - i - 1) * p.ncwo + j
-                l = p.no1 + p.ndns + (p.ndoc - i - 1) + j*p.ndoc
-                C[:,l] = C_old[:,k]
-        if not self.pair_doubles:
-            np.save(p.title+"_C.npy",C)
-            print(f"saving {p.title}C.npy")
+        if self.C_AO_MO is None:
+            if C is None:
+                _, C = eigh(self.H_ao, S_ao)
+            C_old = pynof.check_ortho(C,S_ao,p)
+            for i in range(p.ndoc):
+                for j in range(p.ncwo):
+                    k = p.no1 + p.ndns + (p.ndoc - i - 1) * p.ncwo + j
+                    l = p.no1 + p.ndns + (p.ndoc - i - 1) + j*p.ndoc
+                    C[:,l] = C_old[:,k]
+            if not self.pair_doubles:
+                np.save(p.title+"_C.npy",C)
+                print(f"saving {p.title}C.npy")
+        else:
+            C_old = self.C_AO_MO
         return C_old
     
     # def _save_gamma(self, n,p):
@@ -297,21 +303,29 @@ class NOFVQE:
         Convert measured occupation numbers n_p into
         gamma parameters for PyNOF (Softmax scheme).
         """
+        assert n.ndim == 1, f"Expected occupation vector, got shape {n.shape}"
+
         p = self.p
 
-        # PyNOF expects a full n vector in AO/MO ordering
-        n_np = np.array(n, dtype=float)
+        # Convert ONCE to NumPy (safe: no gradients, no JIT)
+        n_np = np.asarray(n, dtype=float)
+
+        # Build reordered occupation vector expected by PyNOF
+        n_reordered = np.copy(n_np)
         
         for i in range(p.ndoc):
             for j in range(p.ncwo):
                 k = p.no1 + p.ndns + (p.ndoc - i - 1) * p.ncwo + j
                 l = p.no1 + p.ndns + (p.ndoc - i - 1) + j*p.ndoc
-                n[k] = n_np[l]
+                n_reordered[k] = n_np[l]
         p.nv = p.nbf5 - p.no1 - p.nsoc 
 
-        # Map n -> gamma
+        assert np.all(n_reordered >= -1e-8)
+        assert np.all(n_reordered <= 2.0 + 1e-8)
+
+        # Map n -> gamma (PyNOF expects NumPy)  
         gamma = pynof.n_to_gammas_softmax(
-            n,
+            n_reordered,
             p.no1,
             p.ndoc,
             p.ndns,
@@ -328,11 +342,11 @@ class NOFVQE:
         H = self.H_ao
         I = self.I_ao
         b_mnl = self.b_mnl
-
+        print("Printing MO old:",C)
         E_orb, C_new, nit, success = pynof.orbopt_adam(
             gamma, C, H, I, b_mnl, p
         )
-
+        print("Printing MO new:",C_new)
         if not success:
             print("Warning: orbital optimization did not fully converge")
 
@@ -351,23 +365,33 @@ class NOFVQE:
         """
         gamma = None
         E_old = None
+        n_old = None
+        E_orb_old = None
         init_param = self.init_param
         for it in range(max_outer):
             print(f"\n==== SC-NOFVQE Iteration {it} ====")
 
             # 1. Build integrals with current orbitals
             self.E_nuc, self.h_MO, self.I_MO, self.n_elec, self.norb = self._mo_integrals(self.crd)
+        
             self.init_param = self._initial_params(init_param)
+
             # 2. Run VQE (pair-only)
             E, params, rdm1, n, vecs, cj12, ck12 = self.ene_vqe()
-
+            print("Updating initial parameters with optimal parameters",params)
+            init_param = params
             print(f"VQE energy: {E:.10f} Ha")
 
-            # 3. Convergence check
-            if E_old is not None and abs(E - E_old) < tol:
-                print("SC-NOFVQE converged")
-                break
-            E_old = E
+            # # 3. Convergence check (NEW)
+            # if n_old is not None:
+            #     dn = np.linalg.norm(n - n_old)
+            #     print(f"NO diff = {dn:.3e}")
+            #     if abs(E - E_old) < tol and dn < tol:
+            #         print("SC-NOFVQE converged (occupations)")
+            #         break
+            
+            # E_old = E
+            # n_old = n
 
             # 4. Convert occupations -> gamma
             gamma = self._n_to_gamma_softmax(n)
@@ -375,7 +399,18 @@ class NOFVQE:
             # 5. Orbital optimization
             E_orb = self._orbital_optimization(gamma)
             print(f"Orbital optimization energy: {E_orb:.10f} Ha")
-            
+
+            # Convergence check (VQE and Orbital energy)
+            if E_orb_old is not None:
+                # if abs(E - E_old) < 1e-4 and abs(E_orb - E_orb_old) < 1e-4:
+                if abs(E_orb - E_orb_old) < 1e-4:
+                    print("SC-NOFVQE converged (occupations)")
+                    break
+            E_old = E
+            #n_old = n
+            E_orb_old = E_orb
+
+        self.init_param = init_param
         return E, params, rdm1, n, vecs, cj12, ck12
     
     # ---------- integrals at a geometry (MO basis) from pynof ----------
@@ -384,7 +419,7 @@ class NOFVQE:
         p = self.p
         # Compute integrals with PyNOF (from AO to MO)
         S_ao, _, _, self.H_ao, self.I_ao, self.b_mnl, _ = pynof.compute_integrals(p.wfn,mol_local,p)
-        self.C_AO_MO = self._read_C_MO(self.C,S_ao,p)
+        self.C_AO_MO = self._read_C_MO(self.C, S_ao,p)
         h_MO,I_or_b_MO = pynof.JKH_MO_tmp(self.C_AO_MO,self.H_ao,self.I_ao,self.b_mnl,p)
         if self.p.RI:
             b_MO = I_or_b_MO
@@ -498,13 +533,24 @@ class NOFVQE:
             self._ansatz_2(theta, hf_state, qubits)
             return [qml.expval(op) for op in self._build_rdm1_ops(norb)]
 
-        params = jnp.atleast_1d(jnp.asarray(params))
+        # params = jnp.atleast_1d(jnp.asarray(params))
         
-        rdm1 = jnp.array(rdm1_qnode(params))
-        # Flatten rdm1 if using SLSQP or L-BFGS-B
-        if self.opt_circ in ["slsqp", "l-bfgs-b", "cobyla"]:
-            rdm1 = rdm1.flatten()
-        
+        # rdm1 = jnp.array(rdm1_qnode(params))
+        # # Flatten rdm1 if using SLSQP or L-BFGS-B
+        # if self.opt_circ in ["slsqp", "l-bfgs-b", "cobyla"]:
+        #     rdm1 = rdm1.flatten()
+
+        rdm1_ut = jnp.array(rdm1_qnode(params))  # length = norb*(norb+1)//2
+
+        rdm1 = jnp.zeros((norb, norb))
+        k = 0
+        for p in range(norb):
+            for q in range(p, norb):
+                rdm1 = rdm1.at[p, q].set(rdm1_ut[k])
+                rdm1 = rdm1.at[q, p].set(rdm1_ut[k])
+                k += 1
+        assert rdm1.ndim == 2 and rdm1.shape[0] == rdm1.shape[1], \
+        f"RDM1 has invalid shape {rdm1.shape}"
         return rdm1
     
     def ene_hf(self, params):
@@ -531,6 +577,9 @@ class NOFVQE:
         if rdm1 is None:
             rdm1 = self._rdm1_from_circuit(params, n_elec, norb)
         n, vecs = self._get_no_on(rdm1,norb,self.pair_doubles)
+        assert n.ndim == 1, f"Occupation numbers have wrong shape {n.shape}"
+        assert vecs.ndim == 2, f"Orbital matrix has wrong shape {vecs.shape}"
+
         h = 1 - n
         S_F = jnp.sum(n[F:])
 
