@@ -97,11 +97,8 @@ class NOFVQE:
         
             n = n[::-1]
             vecs = vecs[:, ::-1]
-        # print("pair_doubles:",pair_doubles)
-        # print("o_n:",n)
-        # print("n_o:",vecs)
         return n, vecs
-    
+        
     
     @staticmethod
     def _func_indix(functional):
@@ -116,9 +113,9 @@ class NOFVQE:
                  basis= 'sto-3g', 
                  max_iterations = 1000,
                  gradient="analytics",
+                 pair_double=False,
                  d_shift=1e-4,
                  C_MO=None,
-                 gamma=None,
                  dev="simulator",
                  opt_circ="sgd",
                  n_shots=None,
@@ -138,7 +135,7 @@ class NOFVQE:
         self.d_shift = d_shift 
         self.p = pynof.param(self.mol,self.basis)
         self.p.ipnof = self.ipnof
-        self.p.RI = True
+        self.p.RI = False
         self.opt_param = None
         self.opt_rdm1 = None
         self.opt_n = None
@@ -152,7 +149,7 @@ class NOFVQE:
         self.C = None
         self.energy_scale = 1e3  # mHa
         self.icall = 0
-        self.pair_doubles = True
+        self.pair_doubles = pair_double
         if self.gradient == "analytics" and C_MO == "guest_C_MO":
             print("searching for C_MO guest")
             file_C = "pynof_C.npy"
@@ -239,22 +236,6 @@ class NOFVQE:
                 if (i % 2 == 0) and (a % 2 == 0):
                     pair_doubles.append(d)
         return pair_doubles
-
-    
-    # ---------- integrals at a geometry (MO basis) from pennylane ----------
-    def _mo_integrals_pennylane(self, crd):
-        """Return (E_nuc, h_MO, I_MO, n_electrons, norb) at given geometry (bohr)."""
-        mol = qml.qchem.Molecule(symbols = self.symbols, 
-                                 coordinates = crd, 
-                                 charge = self.charge, 
-                                 mult = self.mul, 
-                                 basis_name = self.basis, 
-                                 unit = self.units)
-        core, h_MO, I_MO = qml.qchem.electron_integrals(mol)()  # MO integrals
-        E_nuc = core[0]
-        n_elec = mol.n_electrons
-        norb = int(h_MO.shape[0])
-        return jnp.array(E_nuc), jnp.array(h_MO), jnp.array(I_MO), n_elec, norb
     
     def _read_C_MO(self, C,S_ao,p):
         if self.C_AO_MO is None:
@@ -272,31 +253,6 @@ class NOFVQE:
         else:
             C_old = self.C_AO_MO
         return C_old
-    
-    # def _save_gamma(self, n,p):
-    #     n_old = np.copy(n)
-    #     for i in range(p.ndoc):
-    #         for j in range(p.ncwo):
-    #             k = p.no1 + p.ndns + (p.ndoc - i - 1) * p.ncwo + j
-    #             l = p.no1 + p.ndns + (p.ndoc - i - 1) + j*p.ndoc
-    #             n[l] = n_old[k]
-    #     np.save(p.title+"_n.npy",n)
-    #     print(f"saving {p.title}n.npy")
-    
-    # def _read_gamma(self, n,p):
-    #     if n is None:
-    #         p.nv = p.nbf5 - p.no1 - p.nsoc 
-    #         gamma = pynof.compute_gammas_softmax(p.ndoc,p.ncwo)
-    #     else:
-    #         n_old = np.copy(n)
-    #         for i in range(p.ndoc):
-    #             for j in range(p.ncwo):
-    #                 k = p.no1 + p.ndns + (p.ndoc - i - 1) * p.ncwo + j
-    #                 l = p.no1 + p.ndns + (p.ndoc - i - 1) + j*p.ndoc
-    #                 n[k] = n_old[l]
-    #         p.nv = p.nbf5 - p.no1 - p.nsoc 
-    #         gamma = pynof.n_to_gammas_softmax(n,p.no1,p.ndoc,p.ndns,p.ncwo)
-    #     return gamma
     
     def _n_to_gamma_softmax(self, n):
         """
@@ -412,6 +368,21 @@ class NOFVQE:
 
         self.init_param = init_param
         return E, params, rdm1, n, vecs, cj12, ck12
+    
+    # ---------- integrals at a geometry (MO basis) from pennylane ----------
+    def _mo_integrals_pennylane(self, crd):
+        """Return (E_nuc, h_MO, I_MO, n_electrons, norb) at given geometry (bohr)."""
+        mol = qml.qchem.Molecule(symbols = self.symbols, 
+                                 coordinates = crd, 
+                                 charge = self.charge, 
+                                 mult = self.mul, 
+                                 basis_name = self.basis, 
+                                 unit = self.units)
+        core, h_MO, I_MO = qml.qchem.electron_integrals(mol)()  # MO integrals
+        E_nuc = core[0]
+        n_elec = mol.n_electrons
+        norb = int(h_MO.shape[0])
+        return jnp.array(E_nuc), jnp.array(h_MO), jnp.array(I_MO), n_elec, norb
     
     # ---------- integrals at a geometry (MO basis) from pynof ----------
     def _mo_integrals_pynof(self):
@@ -533,24 +504,24 @@ class NOFVQE:
             self._ansatz_2(theta, hf_state, qubits)
             return [qml.expval(op) for op in self._build_rdm1_ops(norb)]
 
-        # params = jnp.atleast_1d(jnp.asarray(params))
-        
-        # rdm1 = jnp.array(rdm1_qnode(params))
-        # # Flatten rdm1 if using SLSQP or L-BFGS-B
-        # if self.opt_circ in ["slsqp", "l-bfgs-b", "cobyla"]:
-        #     rdm1 = rdm1.flatten()
+        if self.pair_doubles:
+            rdm1_ut = jnp.array(rdm1_qnode(params))  # length = norb*(norb+1)//2
 
-        rdm1_ut = jnp.array(rdm1_qnode(params))  # length = norb*(norb+1)//2
-
-        rdm1 = jnp.zeros((norb, norb))
-        k = 0
-        for p in range(norb):
-            for q in range(p, norb):
-                rdm1 = rdm1.at[p, q].set(rdm1_ut[k])
-                rdm1 = rdm1.at[q, p].set(rdm1_ut[k])
-                k += 1
-        assert rdm1.ndim == 2 and rdm1.shape[0] == rdm1.shape[1], \
-        f"RDM1 has invalid shape {rdm1.shape}"
+            rdm1 = jnp.zeros((norb, norb))
+            k = 0
+            for p in range(norb):
+                for q in range(p, norb):
+                    rdm1 = rdm1.at[p, q].set(rdm1_ut[k])
+                    rdm1 = rdm1.at[q, p].set(rdm1_ut[k])
+                    k += 1
+            assert rdm1.ndim == 2 and rdm1.shape[0] == rdm1.shape[1], \
+            f"RDM1 has invalid shape {rdm1.shape}"
+        else:
+            params = jnp.atleast_1d(jnp.asarray(params))
+            rdm1 = jnp.array(rdm1_qnode(params))
+            # Flatten rdm1 if using SLSQP or L-BFGS-B
+            if self.opt_circ in ["slsqp", "l-bfgs-b", "cobyla"]:
+                rdm1 = rdm1.flatten()
         return rdm1
     
     def ene_hf(self, params):
@@ -577,8 +548,10 @@ class NOFVQE:
         if rdm1 is None:
             rdm1 = self._rdm1_from_circuit(params, n_elec, norb)
         n, vecs = self._get_no_on(rdm1,norb,self.pair_doubles)
-        assert n.ndim == 1, f"Occupation numbers have wrong shape {n.shape}"
-        assert vecs.ndim == 2, f"Orbital matrix has wrong shape {vecs.shape}"
+        
+        if self.pair_doubles:
+            assert n.ndim == 1, f"Occupation numbers have wrong shape {n.shape}"
+            assert vecs.ndim == 2, f"Orbital matrix has wrong shape {vecs.shape}"
 
         h = 1 - n
         S_F = jnp.sum(n[F:])
@@ -1116,11 +1089,15 @@ class NOFVQE:
 # Run the calculation
 # =========================
 if __name__ == "__main__":
-    xyz_file = "lih_bohr.xyz"
-    #xyz_file = "h2_bohr.xyz"
+    import sys
+    if len(sys.argv) < 2:
+        print("Usage: python nofvqe.py <file.xyz>")
+        sys.exit(1)
+
+    xyz_file = sys.argv[1]
     functional="pnof4"
     #functional="vqe"
-    conv_tol=1e-8
+    conv_tol=1e-7
     #init_param=0.1
     init_param=None
     basis='sto-3g'
@@ -1130,10 +1107,12 @@ if __name__ == "__main__":
     d_shift=1e-4
     C_MO = "guest_C_MO"
     dev="simulator"
+    #opt_circ="sgd"
     opt_circ="slsqp"
     n_shots=10000
-    optimization_level=3,
-    resilience_level=0,
+    optimization_level=3
+    resilience_level=0
+    pair_double = False
     cal = NOFVQE(
             xyz_file, 
             functional=functional, 
@@ -1143,6 +1122,7 @@ if __name__ == "__main__":
             max_iterations=max_iterations,
             opt_circ=opt_circ,
             gradient=gradient,
+            pair_double=pair_double,
             d_shift=d_shift,
             C_MO=C_MO,
             dev=dev,
@@ -1150,6 +1130,16 @@ if __name__ == "__main__":
             optimization_level=optimization_level,
             resilience_level=resilience_level,
                  )
+    if pair_double:
+        E_min, params_opt, rdm1_opt, n, vecs, cj12, ck12 = cal.run_scnofvqe()
+        print("Min Ene VQE and param:", E_min, params_opt)
+    else:
+        E_min, params_opt, rdm1_opt, n, vecs, cj12, ck12 = cal.ene_vqe()
+        print("Min Ene VQE and param:", E_min, params_opt)
+        # Nuclear gradient
+        grad = cal.grad()
+        print(f"Nuclear gradient ({gradient}):\n", grad)
+        
     # Run VQE
     # E_h, params_h, rdm1_h, n_h, vecs_h, cj12_h, ck12_h=cal._vqe(cal.ene_pnof4, init_param, crds, method="adam")
     # Run NOF-VQE
@@ -1163,5 +1153,5 @@ if __name__ == "__main__":
     # grad = cal.grad()
     # print(f"Nuclear gradient ({gradient}):\n", grad)  
     # print("Crd:",cal.crd)
-    E_min, params_opt, rdm1_opt, n, vecs, cj12, ck12 = cal.run_scnofvqe()
-    print("Min Ene VQE and param:", E_min, params_opt)
+    # E_min, params_opt, rdm1_opt, n, vecs, cj12, ck12 = cal.run_scnofvqe()
+    # print("Min Ene VQE and param:", E_min, params_opt)
