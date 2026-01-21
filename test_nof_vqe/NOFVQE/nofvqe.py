@@ -135,7 +135,7 @@ class NOFVQE:
         self.d_shift = d_shift 
         self.p = pynof.param(self.mol,self.basis)
         self.p.ipnof = self.ipnof
-        self.p.RI = False
+        self.p.RI = True
         self.opt_param = None
         self.opt_rdm1 = None
         self.opt_n = None
@@ -369,6 +369,51 @@ class NOFVQE:
         self.init_param = init_param
         return E, params, rdm1, n, vecs, cj12, ck12
     
+    def ao_to_mo_1e(self, H_ao, C):
+        return np.einsum("up,uv,vq->pq", C, H_ao, C, optimize=True)
+    
+    def ao_to_mo_2e(self, I_ao, C):
+        """
+        Robust AO → MO transformation of two-electron integrals.
+        Works even if PyNOF uses nonstandard internal ordering.
+        """
+
+        # # Check rank explicitly (VERY IMPORTANT)
+        # assert I_ao.ndim == 4, f"I_ao must be rank-4, got shape {I_ao.shape}"
+        # assert C.ndim == 2
+
+        # μ → p
+        tmp = np.tensordot(C, I_ao, axes=(0, 0))      # (p, ν, λ, σ)
+
+        # ν → q
+        tmp = np.tensordot(C, tmp, axes=(0, 1))       # (q, p, λ, σ)
+        tmp = np.moveaxis(tmp, 0, 1)                  # (p, q, λ, σ)
+
+        # λ → r
+        tmp = np.tensordot(C, tmp, axes=(0, 2))       # (r, p, q, σ)
+        tmp = np.moveaxis(tmp, 0, 2)                  # (p, q, r, σ)
+
+        # σ → s
+        I_MO = np.tensordot(C, tmp, axes=(0, 3))      # (s, p, q, r)
+        I_MO = np.moveaxis(I_MO, 0, 3)                # (p, q, r, s)
+
+        return I_MO
+    
+    def pynof_Ilist_to_tensor(self, I_ao, nao):
+        """
+        Convert PyNOF AO integral list to full 4-index tensor (chemist).
+        """
+        I_full = np.zeros((nao, nao, nao, nao))
+
+        for mu in range(nao):
+            for nu in range(nao):
+                for lam in range(nao):
+                    for sig in range(nao):
+                        I_full[mu, nu, lam, sig] = I_ao[mu][nu][lam][sig]
+
+        return I_full
+
+    
     # ---------- integrals at a geometry (MO basis) from pennylane ----------
     def _mo_integrals_pennylane(self, crd):
         """Return (E_nuc, h_MO, I_MO, n_electrons, norb) at given geometry (bohr)."""
@@ -391,22 +436,64 @@ class NOFVQE:
         # Compute integrals with PyNOF (from AO to MO)
         S_ao, _, _, self.H_ao, self.I_ao, self.b_mnl, _ = pynof.compute_integrals(p.wfn,mol_local,p)
         self.C_AO_MO = self._read_C_MO(self.C, S_ao,p)
-        h_MO,I_or_b_MO = pynof.JKH_MO_tmp(self.C_AO_MO,self.H_ao,self.I_ao,self.b_mnl,p)
-        if self.p.RI:
-            b_MO = I_or_b_MO
-            I_MO = np.einsum("pql,rsl->prsq", b_MO, b_MO, optimize=True)
-        else:
-            I_MO = np.transpose(I_or_b_MO, axes=(0,2,3,1))
-        norb = int(h_MO.shape[0])
-        E_nuc = mol_local.nuclear_repulsion_energy()
-        n_elec = p.ne
-        return jnp.array(E_nuc), jnp.array(h_MO), jnp.array(I_MO), n_elec, norb
+        # print("C_AO_MO",self.C_AO_MO)
+        
+        # # --- 1e integrals ---
+        # h_MO = self.ao_to_mo_1e(self.H_ao, self.C_AO_MO)
+
+        # # --- 2e integrals (PyNOF-style) ---
+        # D = np.einsum(
+        #     'mi,ni->imn',
+        #     self.C_AO_MO[:, :p.nbf5],
+        #     self.C_AO_MO[:, :p.nbf5],
+        #     optimize=True
+        # )
+
+        # b_pnl = np.tensordot(
+        #     self.C_AO_MO[:, :p.nbf5],
+        #     self.b_mnl,
+        #     axes=([0],[0])
+        # )
+
+        # b_pql = np.einsum(
+        #     'nq,pnl->pql',
+        #     self.C_AO_MO[:, :p.nbf5],
+        #     b_pnl,
+        #     optimize=True
+        # )
+
+        # I_MO = np.einsum(
+        #     'pql,rsl->prsq',
+        #     b_pql,
+        #     b_pql,
+        #     optimize=True
+        # )
+
+        # # h_MO,I_or_b_MO = pynof.JKH_MO_tmp(self.C_AO_MO,self.H_ao,self.I_ao,self.b_mnl,p)
+        # # #J_MO,K_MO,H_core = pynof.computeJKH_MO(self.C_AO_MO,self.H_ao,self.I_ao,self.b_mnl,p)
+        # # if self.p.RI:
+        # #     D = np.einsum('mi,ni->imn', self.C_AO_MO[:,0:p.nbf5], self.C_AO_MO[:,0:p.nbf5],optimize=True)
+        # #     b_pnl = np.tensordot(self.C_AO_MO[:,0:p.nbf5],self.b_mnl, axes=([0],[0]))
+        # #     b_pql = np.einsum('nq,pnl->pql',self.C_AO_MO[:,0:p.nbf5],b_pnl, optimize=True) 
+        # #     I_MO = np.einsum("pql,rsl->prsq", b_pql, b_pql, optimize=True)
+        # #     #b_MO = I_or_b_MO
+        # #     #I_MO = np.einsum("pql,rsl->prsq", b_MO, b_MO, optimize=True)
+        # # else:
+        # #     I_MO = np.transpose(I_or_b_MO, axes=(0,2,1,3))
+        # #     #I_MO = np.transpose(I_or_b_MO, axes=(0,2,3,1))
+        # norb = int(h_MO.shape[0])
+        # E_nuc = mol_local.nuclear_repulsion_energy()
+        # n_elec = p.ne
+        # return jnp.array(E_nuc), jnp.array(h_MO), jnp.array(I_MO), n_elec, norb
     
     def _mo_integrals(self, crd):
-        if self.gradient == "analytics":
-            E_nuc, h_MO, I_MO, n_elec, norb = self._mo_integrals_pynof()
-        else:
-            E_nuc, h_MO, I_MO, n_elec, norb = self._mo_integrals_pennylane(crd)
+        # if self.gradient == "analytics":
+        #     E_nuc, h_MO, I_MO, n_elec, norb = self._mo_integrals_pynof()
+        # else:
+        #     E_nuc, h_MO, I_MO, n_elec, norb = self._mo_integrals_pennylane(crd)
+        
+        self._mo_integrals_pynof()
+        E_nuc, h_MO, I_MO, n_elec, norb = self._mo_integrals_pennylane(crd)
             
         self.singles, self.doubles = qml.qchem.excitations(n_elec, 2 * norb)
         
@@ -548,7 +635,7 @@ class NOFVQE:
         if rdm1 is None:
             rdm1 = self._rdm1_from_circuit(params, n_elec, norb)
         n, vecs = self._get_no_on(rdm1,norb,self.pair_doubles)
-        
+
         if self.pair_doubles:
             assert n.ndim == 1, f"Occupation numbers have wrong shape {n.shape}"
             assert vecs.ndim == 2, f"Orbital matrix has wrong shape {vecs.shape}"
@@ -1112,7 +1199,7 @@ if __name__ == "__main__":
     n_shots=10000
     optimization_level=3
     resilience_level=0
-    pair_double = False
+    pair_double = True
     cal = NOFVQE(
             xyz_file, 
             functional=functional, 
@@ -1130,6 +1217,7 @@ if __name__ == "__main__":
             optimization_level=optimization_level,
             resilience_level=resilience_level,
                  )
+
     if pair_double:
         E_min, params_opt, rdm1_opt, n, vecs, cj12, ck12 = cal.run_scnofvqe()
         print("Min Ene VQE and param:", E_min, params_opt)
