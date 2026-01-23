@@ -1102,8 +1102,8 @@ if __name__ == "__main__":
     init_param=None
     basis='sto-3g'
     max_iterations=500
-    gradient="analytics"
-    #gradient="df_fedorov"
+    #gradient="analytics"
+    gradient="df_fedorov"
     d_shift=1e-4
     C_MO = "guest_C_MO"
     dev="simulator"
