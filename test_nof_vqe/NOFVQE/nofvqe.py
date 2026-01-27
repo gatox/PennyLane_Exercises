@@ -173,7 +173,9 @@ class NOFVQE:
             self.init_param = 0.1
         else:
             if self.pair_doubles:
-                self.init_param = init_param
+                #self.init_param = init_param
+                self.E_nuc, self.h_MO, self.I_MO, self.n_elec, self.norb = self._mo_integrals(self.crd)
+                self.init_param = self._initial_params(init_param)
             else:
                 self.E_nuc, self.h_MO, self.I_MO, self.n_elec, self.norb = self._mo_integrals(self.crd)
                 self.init_param = self._initial_params(init_param)
@@ -537,7 +539,7 @@ class NOFVQE:
         val = jnp.squeeze(val)     
         return val, None, None, None, None, None
 
-    def ene_pnof4(self, params, rdm1=None):
+    def ene_pnof(self, params, rdm1=None):
         # Functions based on 1-RDM (J. Chem. Theory Comput. 2025, 21, 5, 2402–2413) and taked from the following repository:
         # https://github.com/felipelewyee/NOF-VQE
         
@@ -555,11 +557,26 @@ class NOFVQE:
 
         h = 1 - n
         S_F = jnp.sum(n[F:])
+        
+        # if self.gradient == "analytics":
+        #     J_MO, K_MO, H_core = pynof.computeJKH_MO(
+        #         self.C_AO_MO, self.H_ao, self.I_ao, self.b_mnl, self.p
+        #     )
+            
+        #     H_MO = jnp.diag(H_core)
 
+        #     h_NO = jnp.einsum("pq,pi,qj->ij", H_MO, vecs, vecs, optimize=True)
+        #     J_NO = jnp.einsum("pq,pi,qj->ij", J_MO,   vecs, vecs, optimize=True)
+        #     K_NO = jnp.einsum("pq,pi,qj->ij", K_MO,   vecs, vecs, optimize=True)
+        # else:
+        #     h_NO = jnp.einsum("ij,ip,jq->pq", h_MO, vecs, vecs, optimize=True)
+        #     J_NO = jnp.einsum("ijkl,ip,jq,kq,lp->pq", I_MO, vecs, vecs, vecs, vecs, optimize=True)
+        #     K_NO = jnp.einsum("ijkl,ip,jp,kq,lq->pq", I_MO, vecs, vecs, vecs, vecs, optimize=True)
+            
         h_NO = jnp.einsum("ij,ip,jq->pq", h_MO, vecs, vecs, optimize=True)
         J_NO = jnp.einsum("ijkl,ip,jq,kq,lp->pq", I_MO, vecs, vecs, vecs, vecs, optimize=True)
         K_NO = jnp.einsum("ijkl,ip,jp,kq,lq->pq", I_MO, vecs, vecs, vecs, vecs, optimize=True)
-    
+        
     
         Delta = jnp.zeros((norb, norb))
         for p in range(norb):
@@ -608,6 +625,57 @@ class NOFVQE:
         ck12 = n_outer - Delta - Pi
     
         return E_nuc + E1 + E2, rdm1, n, vecs, cj12, ck12
+    
+    def ene_pnof4(self, params, rdm1=None):
+
+        E_nuc, h_MO, I_MO, n_elec, norb = (
+            self.E_nuc, self.h_MO, self.I_MO, self.n_elec, self.norb
+        )
+
+        F = n_elec // 2  # number of electron pairs
+
+        if rdm1 is None:
+            rdm1 = self._rdm1_from_circuit(params, n_elec, norb)
+
+        # Natural occupations and orbitals
+        n, vecs = self._get_no_on(rdm1, norb, pair_doubles=True)
+
+        # Transform integrals to NO basis
+        h_NO = jnp.einsum("ij,ip,jq->pq", h_MO, vecs, vecs, optimize=True)
+        J_NO = jnp.einsum("ijkl,ip,jq,kq,lp->pq", I_MO, vecs, vecs, vecs, vecs, optimize=True)
+        K_NO = jnp.einsum("ijkl,ip,jp,kq,lq->pq", I_MO, vecs, vecs, vecs, vecs, optimize=True)
+
+        # --- Build CJ and CK (PNOF5) ---
+        cj12 = 2.0 * jnp.outer(n, n)
+        ck12 = jnp.outer(n, n)
+
+        # Pair structure (Ω_g)
+        for g in range(F):
+            p = g                       # strongly occupied orbital
+            q_start = F + g*(norb-F)//F
+            q_end   = q_start + (norb-F)//F
+
+            n_strong = n[p]
+            n_weak = n[q_start:q_end]
+
+            # Remove Coulomb intra-pair
+            cj12 = cj12.at[p, q_start:q_end].set(0.0)
+            cj12 = cj12.at[q_start:q_end, p].set(0.0)
+            cj12 = cj12.at[q_start:q_end, q_start:q_end].set(0.0)
+
+            # Exchange terms
+            ck12 = ck12.at[p, q_start:q_end].set(jnp.sqrt(n_strong * n_weak))
+            ck12 = ck12.at[q_start:q_end, p].set(jnp.sqrt(n_strong * n_weak))
+            ck12 = ck12.at[q_start:q_end, q_start:q_end].set(
+                -jnp.sqrt(jnp.outer(n_weak, n_weak))
+            )
+
+        # --- Energy ---
+        E1 = 2.0 * jnp.sum(n * jnp.diag(h_NO))
+        E2 = jnp.sum(cj12 * J_NO) - jnp.sum(ck12 * K_NO)
+
+        return E_nuc + E1 + E2, rdm1, n, vecs, cj12, ck12
+
 
     # =========================
     # Circuit optimizers
@@ -1112,7 +1180,7 @@ if __name__ == "__main__":
     n_shots=10000
     optimization_level=3
     resilience_level=0
-    pair_double = False
+    pair_double = True
     cal = NOFVQE(
             xyz_file, 
             functional=functional, 
@@ -1131,7 +1199,8 @@ if __name__ == "__main__":
             resilience_level=resilience_level,
                  )
     if pair_double:
-        E_min, params_opt, rdm1_opt, n, vecs, cj12, ck12 = cal.run_scnofvqe()
+        #E_min, params_opt, rdm1_opt, n, vecs, cj12, ck12 = cal.run_scnofvqe()
+        E_min, params_opt, rdm1_opt, n, vecs, cj12, ck12 = cal.ene_vqe()
         print("Min Ene VQE and param:", E_min, params_opt)
     else:
         E_min, params_opt, rdm1_opt, n, vecs, cj12, ck12 = cal.ene_vqe()
