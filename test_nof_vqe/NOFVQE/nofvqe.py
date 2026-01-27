@@ -9,6 +9,7 @@ from pennylane import jordan_wigner
 
 import jax
 from jax import numpy as jnp
+from jax.scipy.linalg import expm
 
 import optax
 import psi4
@@ -150,6 +151,7 @@ class NOFVQE:
         self.energy_scale = 1e3  # mHa
         self.icall = 0
         self.pair_doubles = pair_double
+        self.optimize_kappa = False
         if self.gradient == "analytics" and C_MO == "guest_C_MO":
             print("searching for C_MO guest")
             file_C = "pynof_C.npy"
@@ -176,6 +178,8 @@ class NOFVQE:
                 #self.init_param = init_param
                 self.E_nuc, self.h_MO, self.I_MO, self.n_elec, self.norb = self._mo_integrals(self.crd)
                 self.init_param = self._initial_params(init_param)
+                self.n_params = len(self.init_param)
+                self.n_kappa = int(self.n_elec/2)
             else:
                 self.E_nuc, self.h_MO, self.I_MO, self.n_elec, self.norb = self._mo_integrals(self.crd)
                 self.init_param = self._initial_params(init_param)
@@ -557,22 +561,7 @@ class NOFVQE:
 
         h = 1 - n
         S_F = jnp.sum(n[F:])
-        
-        # if self.gradient == "analytics":
-        #     J_MO, K_MO, H_core = pynof.computeJKH_MO(
-        #         self.C_AO_MO, self.H_ao, self.I_ao, self.b_mnl, self.p
-        #     )
-            
-        #     H_MO = jnp.diag(H_core)
-
-        #     h_NO = jnp.einsum("pq,pi,qj->ij", H_MO, vecs, vecs, optimize=True)
-        #     J_NO = jnp.einsum("pq,pi,qj->ij", J_MO,   vecs, vecs, optimize=True)
-        #     K_NO = jnp.einsum("pq,pi,qj->ij", K_MO,   vecs, vecs, optimize=True)
-        # else:
-        #     h_NO = jnp.einsum("ij,ip,jq->pq", h_MO, vecs, vecs, optimize=True)
-        #     J_NO = jnp.einsum("ijkl,ip,jq,kq,lp->pq", I_MO, vecs, vecs, vecs, vecs, optimize=True)
-        #     K_NO = jnp.einsum("ijkl,ip,jp,kq,lq->pq", I_MO, vecs, vecs, vecs, vecs, optimize=True)
-            
+             
         h_NO = jnp.einsum("ij,ip,jq->pq", h_MO, vecs, vecs, optimize=True)
         J_NO = jnp.einsum("ijkl,ip,jq,kq,lp->pq", I_MO, vecs, vecs, vecs, vecs, optimize=True)
         K_NO = jnp.einsum("ijkl,ip,jp,kq,lq->pq", I_MO, vecs, vecs, vecs, vecs, optimize=True)
@@ -623,23 +612,69 @@ class NOFVQE:
         n_outer = jnp.outer(n, n)
         cj12 = 2.0 * (n_outer - Delta)
         ck12 = n_outer - Delta - Pi
-    
+
         return E_nuc + E1 + E2, rdm1, n, vecs, cj12, ck12
     
-    def ene_pnof4(self, params, rdm1=None):
+    def build_pnof5_pair_array(self, n, n_elec, norb):
+        F = n_elec // 2
+        idx = jnp.argsort(-n)
 
+        pair = -jnp.ones(norb, dtype=jnp.int64)
+
+        for g in range(F):
+            p = idx[g]
+            q = idx[2*F - 1 - g]
+            pair = pair.at[p].set(q)
+            pair = pair.at[q].set(p)
+
+        return pair
+    
+    def build_kappa_pairs(self, kappa_params, pair_of, norb):
+        K = jnp.zeros((norb, norb))
+        idx = 0
+        for p, q in pair_of.items():
+            if p < q:
+                K = K.at[p, q].set(kappa_params[idx])
+                K = K.at[q, p].set(-kappa_params[idx])
+                idx += 1
+        return K
+    
+    from jax.scipy.linalg import expm
+
+    def rotate_orbitals(vecs, kappa_params, pair_of):
+        norb = vecs.shape[0]
+        K = self.build_kappa_pairs(kappa_params, pair_of, norb)
+        U = expm(K)
+        return vecs @ U
+
+    def ene_pnof4(self, x, rdm1=None):
         E_nuc, h_MO, I_MO, n_elec, norb = (
             self.E_nuc, self.h_MO, self.I_MO, self.n_elec, self.norb
         )
 
-        F = n_elec // 2  # number of electron pairs
+        if self.optimize_kappa:
+            n_params = self.n_params
+            params = x[:n_params]
+            kappa_params = x[n_params:]
+        else:
+            params = x
+            kappa_params = None
 
+        F = n_elec // 2  # number of electron pairs (Fermi level)
+        
         if rdm1 is None:
             rdm1 = self._rdm1_from_circuit(params, n_elec, norb)
 
         # Natural occupations and orbitals
         n, vecs = self._get_no_on(rdm1, norb, pair_doubles=True)
-
+        
+        #pair_of = self.build_pnof5_pairs(n_elec)
+        pair_of = self.build_pnof5_pair_array(n, n_elec, norb)
+        
+        # Rotation NO
+        if kappa_params is not None:
+            vecs = self.rotate_orbitals(vecs, kappa_params, pair_of)
+        
         # Transform integrals to NO basis
         h_NO = jnp.einsum("ij,ip,jq->pq", h_MO, vecs, vecs, optimize=True)
         J_NO = jnp.einsum("ijkl,ip,jq,kq,lp->pq", I_MO, vecs, vecs, vecs, vecs, optimize=True)
@@ -651,9 +686,9 @@ class NOFVQE:
 
         # Pair structure (Ω_g)
         for g in range(F):
-            p = g                       # strongly occupied orbital
-            q_start = F + g*(norb-F)//F
-            q_end   = q_start + (norb-F)//F
+            p = g  # strongly occupied orbital
+            q_start = F + (F-g-1)*(int((norb-F)/F))
+            q_end   = q_start + int((norb-F)/F)
 
             n_strong = n[p]
             n_weak = n[q_start:q_end]
@@ -670,11 +705,35 @@ class NOFVQE:
                 -jnp.sqrt(jnp.outer(n_weak, n_weak))
             )
 
-        # --- Energy ---
-        E1 = 2.0 * jnp.sum(n * jnp.diag(h_NO))
-        E2 = jnp.sum(cj12 * J_NO) - jnp.sum(ck12 * K_NO)
+        # ---------- One-body ----------
+        E1 = jnp.sum(n * (2.0 * jnp.diag(h_NO) + jnp.diag(J_NO)))
 
-        return E_nuc + E1 + E2, rdm1, n, vecs, cj12, ck12
+        # ---------- Two-body ----------
+        E2 = 0.0
+
+        # Inter-pair
+        E2_inter = 0.0
+        for p in range(norb):
+            for q in range(norb):
+                if p == q:
+                    continue
+                E2_inter += (
+                    n[p] * n[q]
+                    * (2.0 * J_NO[p, q] - K_NO[p, q])
+                    * (pair_of[p] != q)
+                )
+        # Intra-pair
+        E2_intra = 0.0
+        for p in range(norb):
+            q = pair_of[p]
+            E2_intra += jnp.where(
+                q > p,   # count each pair once
+                -jnp.sqrt(n[p] * n[q]) * K_NO[p, q],
+                0.0,
+            )
+            
+        E = E_nuc + E1 + E2_inter + E2_intra
+        return E, rdm1, n, vecs, cj12, ck12
 
 
     # =========================
