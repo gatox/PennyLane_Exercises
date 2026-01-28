@@ -151,7 +151,6 @@ class NOFVQE:
         self.energy_scale = 1e3  # mHa
         self.icall = 0
         self.pair_doubles = pair_double
-        self.optimize_kappa = False
         if self.gradient == "analytics" and C_MO == "guest_C_MO":
             print("searching for C_MO guest")
             file_C = "pynof_C.npy"
@@ -626,26 +625,65 @@ class NOFVQE:
             q = idx[2*F - 1 - g]
             pair = pair.at[p].set(q)
             pair = pair.at[q].set(p)
-
         return pair
     
     def build_kappa_pairs(self, kappa_params, pair_of, norb):
         K = jnp.zeros((norb, norb))
-        idx = 0
-        for p, q in pair_of.items():
-            if p < q:
-                K = K.at[p, q].set(kappa_params[idx])
-                K = K.at[q, p].set(-kappa_params[idx])
-                idx += 1
-        return K
-    
-    from jax.scipy.linalg import expm
 
-    def rotate_orbitals(vecs, kappa_params, pair_of):
+        idx = 0
+        for p in range(norb):
+            q = pair_of[p]
+
+            # Only allow inter-pair rotations
+            if q <= p:
+                continue
+
+            if idx >= len(kappa_params):
+                break
+
+            k = kappa_params[idx]
+            idx += 1
+
+            K = K.at[p, q].set( k)
+            K = K.at[q, p].set(-k)
+
+        return K
+
+
+    def rotate_orbitals(self, vecs, kappa_params, pair_of):
         norb = vecs.shape[0]
         K = self.build_kappa_pairs(kappa_params, pair_of, norb)
         U = expm(K)
         return vecs @ U
+    
+    def build_pnof5_omega_from_occupations(self, n, norb, tol=1e-8):
+        Omega = []
+        
+        strong = [p for p in range(norb) if n[p] > 0.5 and (1.0 - n[p]) > tol]
+        weak = [p for p in range(norb) if n[p] <= 0.5]
+        print("Strong:",strong)
+        print("weak:",weak)
+        
+        used_weak = set()
+
+        for g in strong:
+            Omega_g = [g]
+            remaining = 1.0 - n[g]
+
+            for q in weak:
+                if q in used_weak:
+                    continue
+                if remaining <= tol:
+                    break
+
+                Omega_g.append(q)
+                remaining -= n[q]
+                used_weak.add(q)
+
+            Omega.append(Omega_g)
+        print("Omega:",Omega)
+        return Omega
+
 
     def ene_pnof4(self, x, rdm1=None):
         E_nuc, h_MO, I_MO, n_elec, norb = (
@@ -668,12 +706,12 @@ class NOFVQE:
         # Natural occupations and orbitals
         n, vecs = self._get_no_on(rdm1, norb, pair_doubles=True)
         
-        #pair_of = self.build_pnof5_pairs(n_elec)
-        pair_of = self.build_pnof5_pair_array(n, n_elec, norb)
+        # >>> ADD HERE <<<
+        Omega = self.build_pnof5_omega_from_occupations(n, norb, tol=1e-8)
         
         # Rotation NO
         if kappa_params is not None:
-            vecs = self.rotate_orbitals(vecs, kappa_params, pair_of)
+            vecs = self.rotate_orbitals(vecs, kappa_params, Omega)
         
         # Transform integrals to NO basis
         h_NO = jnp.einsum("ij,ip,jq->pq", h_MO, vecs, vecs, optimize=True)
@@ -683,58 +721,58 @@ class NOFVQE:
         # --- Build CJ and CK (PNOF5) ---
         cj12 = 2.0 * jnp.outer(n, n)
         ck12 = jnp.outer(n, n)
+        
+        # # Pair structure (Ω_g)
+        # for g in range(F):
+        #     p = g  # strongly occupied orbital
+        #     q_start = F + g * n_w
+        #     q_end   = q_start + n_w
+        #     n_strong = n[p]
+        #     n_weak = n[q_start:q_end]
 
-        # Pair structure (Ω_g)
-        for g in range(F):
-            p = g  # strongly occupied orbital
-            q_start = F + (F-g-1)*(int((norb-F)/F))
-            q_end   = q_start + int((norb-F)/F)
+        #     # Remove Coulomb intra-pair
+        #     cj12 = cj12.at[p, q_start:q_end].set(0.0)
+        #     cj12 = cj12.at[q_start:q_end, p].set(0.0)
+        #     cj12 = cj12.at[q_start:q_end, q_start:q_end].set(0.0)
 
-            n_strong = n[p]
-            n_weak = n[q_start:q_end]
+        #     # Exchange terms
+        #     ck12 = ck12.at[p, q_start:q_end].set(jnp.sqrt(n_strong * n_weak))
+        #     ck12 = ck12.at[q_start:q_end, p].set(jnp.sqrt(n_strong * n_weak))
+        #     ck12 = ck12.at[q_start:q_end, q_start:q_end].set(
+        #         -jnp.sqrt(jnp.outer(n_weak, n_weak))
+        #     )
+        
+        
+        # Omega = []
+        # for g in range(F):
+        #     start = F + g * n_w
+        #     end   = start + n_w
+        #     Omega_g = [g] + list(range(start, end))
+        #     Omega.append(Omega_g)
+        #     print("Omega_g:",Omega_g)
+        
+        E = 0.0
 
-            # Remove Coulomb intra-pair
-            cj12 = cj12.at[p, q_start:q_end].set(0.0)
-            cj12 = cj12.at[q_start:q_end, p].set(0.0)
-            cj12 = cj12.at[q_start:q_end, q_start:q_end].set(0.0)
-
-            # Exchange terms
-            ck12 = ck12.at[p, q_start:q_end].set(jnp.sqrt(n_strong * n_weak))
-            ck12 = ck12.at[q_start:q_end, p].set(jnp.sqrt(n_strong * n_weak))
-            ck12 = ck12.at[q_start:q_end, q_start:q_end].set(
-                -jnp.sqrt(jnp.outer(n_weak, n_weak))
-            )
-
-        # ---------- One-body ----------
-        E1 = jnp.sum(n * (2.0 * jnp.diag(h_NO) + jnp.diag(J_NO)))
-
-        # ---------- Two-body ----------
-        E2 = 0.0
-
-        # Inter-pair
-        E2_inter = 0.0
+        # ---- one-body ----
         for p in range(norb):
-            for q in range(norb):
-                if p == q:
-                    continue
-                E2_inter += (
-                    n[p] * n[q]
-                    * (2.0 * J_NO[p, q] - K_NO[p, q])
-                    * (pair_of[p] != q)
-                )
-        # Intra-pair
-        E2_intra = 0.0
-        for p in range(norb):
-            q = pair_of[p]
-            E2_intra += jnp.where(
-                q > p,   # count each pair once
-                -jnp.sqrt(n[p] * n[q]) * K_NO[p, q],
-                0.0,
-            )
-            
-        E = E_nuc + E1 + E2_inter + E2_intra
-        return E, rdm1, n, vecs, cj12, ck12
+            E += 2.0 * n[p] * h_NO[p, p] + n[p] * J_NO[p, p]
+        
+        n_pairs = len(Omega)
+        # ---- inter-pair ----
+        for g in range(n_pairs):
+            for f in range(g + 1,n_pairs):
+                for p in Omega[g]:
+                    for q in Omega[f]:
+                        E += n[p] * n[q] * (2.0 * J_NO[p, q] - K_NO[p, q])
 
+        # ---- intra-pair exchange ----
+        for g in range(n_pairs):
+            for p in Omega[g]:
+                for q in Omega[g]:
+                    if q > p:
+                        E -= 2.0 * jnp.sqrt(n[p] * n[q]) * K_NO[p, q]
+
+        return E_nuc + E, rdm1, n, vecs, cj12, ck12
 
     # =========================
     # Circuit optimizers
@@ -837,61 +875,33 @@ class NOFVQE:
                 break
 
         return E_history, params_history, rdm1_history, n_history, vecs_history, cj12_history, ck12_history
-
-    def _vqe_opt_scipy(self, E_fn, method, params, max_iterations):
+    
+    # Helper scipy minimizer
+    def _run_scipy_minimize(self, E_fn, method, params, max_iterations):
         """
         VQE optimization using:
             SLSQP, L-BFGS-B and COBYLA
         """
-
-        # Define wrappers for scipy
         def E_scipy(x):
-            x = jnp.array(x)  # ensure JAX array
-            E_val, _, _, _, _, _ = E_fn(x)
-            return float(E_val* self.energy_scale)
-        
-        # If running on a real/remote backend, do NOT supply an analytic jacobian to SciPy.
-        # SciPy will use finite differences (function evaluations only) which is robust.
-        use_analytic_jac = (method.lower() in ["slsqp", "l-bfgs-b"]) and (getattr(self, "dev", "simulator") == "simulator")
-        
-        #COBYLA optimizer doesn't support jacobian
+            x = jnp.array(x)
+            E_val, *_ = E_fn(x)
+            return float(E_val * self.energy_scale)
+
+        use_analytic_jac = (
+            method.lower() in ["slsqp", "l-bfgs-b"]
+            and getattr(self, "dev", "simulator") == "simulator"
+        )
+
         if use_analytic_jac:
             def grad_scipy(x):
-                x = jnp.array(x)  # ensure JAX array
-                grad_fn = lambda p: E_fn(p)[0]
-                # This will call jax.grad - only safe on local simulator
-                g = jax.grad(grad_fn)(x)
-                return np.array(g, dtype=float)
+                x = jnp.array(x)
+                return np.array(jax.grad(lambda p: E_fn(p)[0])(x), dtype=float)
             jac = grad_scipy
         else:
-            # For remote devices or other methods, let SciPy approximate the jac via FD
-            jac = None  # COBYLA doesn't use gradients
+            jac = None
 
         bounds = [(-np.pi, np.pi) for _ in range(len(np.atleast_1d(params)))]
 
-        iter_counter = {"i": 0}
-        # this function prints the values per iterations, however, 
-        # it computes the 1rdm two times more, so it is not recommended 
-        # to use it in a real QC
-        def callback(xk):
-            x = jnp.array(xk)
-            E_val, *_ = E_fn(x)
-
-            if jac is not None:
-                g = jac(xk)
-                g_maxabs = np.max(np.abs(g))
-                print(
-                    f"Step = {iter_counter['i']}, "
-                    f"Energy = {float(E_val):.8f} Ha, "
-                    f"Gradient = {g_maxabs:.1e}"
-                )
-            else:
-                print(
-                    f"Step = {iter_counter['i']}, "
-                    f"Energy = {float(E_val):.8f} Ha"
-                )
-
-            iter_counter["i"] += 1
         res = minimize(
             E_scipy,
             np.array(params, dtype=float),
@@ -901,17 +911,151 @@ class NOFVQE:
             tol=self.conv_tol,
             options={
                 "maxiter": max_iterations,
-                "ftol": self.conv_tol,   # keep it
-                "eps": 1e-8,             # critical
+                "ftol": self.conv_tol,
+                "eps": 1e-8,
             },
-            #callback=callback,
         )
-        
-        res_x = np.asarray(res.x, dtype=float)
-        res_x_wrapped = self._wrap_angles(res_x)
 
-        E_val, rdm1_val, n_val, vecs_val, cj12_val, ck12_val = E_fn(jnp.array(res_x_wrapped))
-        return [E_val], [res.x], [rdm1_val], [n_val], [vecs_val], [cj12_val], [ck12_val]
+        return res
+    
+    def _vqe_opt_scipy(self, E_fn, method, params, max_iterations):
+
+        # -------------------------------------------------
+        # STAGE 1 — θ only (NO discovery)
+        # -------------------------------------------------
+        self.optimize_kappa = False
+
+        res_theta = self._run_scipy_minimize(
+            E_fn,
+            method,
+            params,
+            max_iterations,
+        )
+
+        theta_opt = self._wrap_angles(res_theta.x)
+
+        # Evaluate once to store NOs etc.
+        E1, rdm1, n, vecs, cj12, ck12 = E_fn(jnp.array(theta_opt))
+
+        # -------------------------------------------------
+        # Decide whether we stop here
+        # -------------------------------------------------
+        if not getattr(self, "orbital_optimization", True):
+            return (
+                [E1],
+                [theta_opt],
+                [rdm1],
+                [n],
+                [vecs],
+                [cj12],
+                [ck12],
+            )
+
+        # -------------------------------------------------
+        # STAGE 2 — θ + κ (orbital optimization)
+        # -------------------------------------------------
+        self.optimize_kappa = False
+
+        n_kappa = self.n_kappa  # you already define this
+        kappa0 = np.zeros(n_kappa)
+
+        x0 = np.concatenate([theta_opt, kappa0])
+
+        res_full = self._run_scipy_minimize(
+            E_fn,
+            method,
+            x0,
+            max_iterations,
+        )
+
+        x_opt = self._wrap_angles(res_full.x)
+
+        E2, rdm1, n, vecs, cj12, ck12 = E_fn(jnp.array(x_opt))
+
+        return (
+            [E2],
+            [x_opt],
+            [rdm1],
+            [n],
+            [vecs],
+            [cj12],
+            [ck12],
+        )
+
+
+    # def _vqe_opt_scipy(self, E_fn, method, params, max_iterations):
+    #     """
+    #     VQE optimization using:
+    #         SLSQP, L-BFGS-B and COBYLA
+    #     """
+    #     # Define wrappers for scipy
+    #     def E_scipy(x):
+    #         x = jnp.array(x)  # ensure JAX array
+    #         E_val, _, _, _, _, _ = E_fn(x)
+    #         return float(E_val* self.energy_scale)
+        
+    #     # If running on a real/remote backend, do NOT supply an analytic jacobian to SciPy.
+    #     # SciPy will use finite differences (function evaluations only) which is robust.
+    #     use_analytic_jac = (method.lower() in ["slsqp", "l-bfgs-b"]) and (getattr(self, "dev", "simulator") == "simulator")
+        
+    #     #COBYLA optimizer doesn't support jacobian
+    #     if use_analytic_jac:
+    #         def grad_scipy(x):
+    #             x = jnp.array(x)  # ensure JAX array
+    #             grad_fn = lambda p: E_fn(p)[0]
+    #             # This will call jax.grad - only safe on local simulator
+    #             g = jax.grad(grad_fn)(x)
+    #             return np.array(g, dtype=float)
+    #         jac = grad_scipy
+    #     else:
+    #         # For remote devices or other methods, let SciPy approximate the jac via FD
+    #         jac = None  # COBYLA doesn't use gradients
+
+    #     bounds = [(-np.pi, np.pi) for _ in range(len(np.atleast_1d(params)))]
+
+    #     iter_counter = {"i": 0}
+    #     # this function prints the values per iterations, however, 
+    #     # it computes the 1rdm two times more, so it is not recommended 
+    #     # to use it in a real QC
+    #     def callback(xk):
+    #         x = jnp.array(xk)
+    #         E_val, *_ = E_fn(x)
+
+    #         if jac is not None:
+    #             g = jac(xk)
+    #             g_maxabs = np.max(np.abs(g))
+    #             print(
+    #                 f"Step = {iter_counter['i']}, "
+    #                 f"Energy = {float(E_val):.8f} Ha, "
+    #                 f"Gradient = {g_maxabs:.1e}"
+    #             )
+    #         else:
+    #             print(
+    #                 f"Step = {iter_counter['i']}, "
+    #                 f"Energy = {float(E_val):.8f} Ha"
+    #             )
+
+    #         iter_counter["i"] += 1
+    #     res = minimize(
+    #         E_scipy,
+    #         np.array(params, dtype=float),
+    #         method=method.upper(),
+    #         jac=jac,
+    #         bounds=bounds,
+    #         tol=self.conv_tol,
+    #         options={
+    #             "maxiter": max_iterations,
+    #             "ftol": self.conv_tol,   # keep it
+    #             "eps": 1e-8,             # critical
+    #         },
+    #         #callback=callback,
+    #     )
+        
+    #     res_x = np.asarray(res.x, dtype=float)
+    #     res_x_wrapped = self._wrap_angles(res_x)
+
+    #     E_val, rdm1_val, n_val, vecs_val, cj12_val, ck12_val = E_fn(jnp.array(res_x_wrapped))
+    #     return [E_val], [res.x], [rdm1_val], [n_val], [vecs_val], [cj12_val], [ck12_val]
     
     def _vqe_cmaes(self, E_fn, params, max_iterations):
         """VQE optimization using CMA-ES."""
