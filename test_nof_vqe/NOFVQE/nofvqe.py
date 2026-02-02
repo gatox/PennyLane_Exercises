@@ -127,7 +127,8 @@ class NOFVQE:
         self.basis = basis
         self.functional = functional
         self.ipnof = None
-        if functional == "pnof4":
+        if functional in ["pnof4","pnof5"]:
+            print("functional:",functional)
             self.ipnof = self._func_indix(functional)
         self.conv_tol = conv_tol
         self.max_iterations = max_iterations
@@ -164,7 +165,7 @@ class NOFVQE:
             self.optimization_level = optimization_level
             self.resilience_level = resilience_level
         self.opt_circ = opt_circ
-        if self.functional != "pnof4":
+        if self.functional not in ["pnof4","pnof5"]:
             self.pl_mol = qml.qchem.Molecule(
             symbols=self.symbols,
             coordinates=self.crd,
@@ -177,6 +178,19 @@ class NOFVQE:
             else:
                 self.E_nuc, self.h_MO, self.I_MO, self.n_elec, self.norb = self._mo_integrals(self.crd)
                 self.init_param = self._initial_params(init_param)
+
+    # ---------------- Selecting the functional ----------------
+    def ene_nof(self, params, rdm1=None):
+        if self.ipnof == 4:
+            return self.ene_pnof4(params, rdm1)
+        elif self.ipnof == 5:
+            if self.pair_doubles:
+                return self.ene_pnof5(params, rdm1)
+            else:
+                raise ValueError(f"Pair_doubles must be True for pnof5")
+        else:
+            raise ValueError(f"Unsupported PNOF level: {self.ipnof}")
+
             
     # ---------------- Generate initial Parameters ----------------
     def _initial_params(self, params):
@@ -358,8 +372,8 @@ class NOFVQE:
 
             # Convergence check (VQE and Orbital energy)
             if E_orb_old is not None:
-                # if abs(E - E_old) < 1e-4 and abs(E_orb - E_orb_old) < 1e-4:
-                if abs(E_orb - E_orb_old) < 1e-4:
+                if abs(E - E_old) < 1e-6 and abs(E_orb - E_orb_old) < 1e-6:
+                #if abs(E_orb - E_orb_old) < 1e-4:
                     print("SC-NOFVQE converged (occupations)")
                     break
             E_old = E
@@ -368,50 +382,6 @@ class NOFVQE:
 
         self.init_param = init_param
         return E, params, rdm1, n, vecs, cj12, ck12
-    
-    def ao_to_mo_1e(self, H_ao, C):
-        return np.einsum("up,uv,vq->pq", C, H_ao, C, optimize=True)
-    
-    def ao_to_mo_2e(self, I_ao, C):
-        """
-        Robust AO → MO transformation of two-electron integrals.
-        Works even if PyNOF uses nonstandard internal ordering.
-        """
-
-        # # Check rank explicitly (VERY IMPORTANT)
-        # assert I_ao.ndim == 4, f"I_ao must be rank-4, got shape {I_ao.shape}"
-        # assert C.ndim == 2
-
-        # μ → p
-        tmp = np.tensordot(C, I_ao, axes=(0, 0))      # (p, ν, λ, σ)
-
-        # ν → q
-        tmp = np.tensordot(C, tmp, axes=(0, 1))       # (q, p, λ, σ)
-        tmp = np.moveaxis(tmp, 0, 1)                  # (p, q, λ, σ)
-
-        # λ → r
-        tmp = np.tensordot(C, tmp, axes=(0, 2))       # (r, p, q, σ)
-        tmp = np.moveaxis(tmp, 0, 2)                  # (p, q, r, σ)
-
-        # σ → s
-        I_MO = np.tensordot(C, tmp, axes=(0, 3))      # (s, p, q, r)
-        I_MO = np.moveaxis(I_MO, 0, 3)                # (p, q, r, s)
-
-        return I_MO
-    
-    def pynof_Ilist_to_tensor(self, I_ao, nao):
-        """
-        Convert PyNOF AO integral list to full 4-index tensor (chemist).
-        """
-        I_full = np.zeros((nao, nao, nao, nao))
-
-        for mu in range(nao):
-            for nu in range(nao):
-                for lam in range(nao):
-                    for sig in range(nao):
-                        I_full[mu, nu, lam, sig] = I_ao[mu][nu][lam][sig]
-
-        return I_full
 
     
     # ---------- integrals at a geometry (MO basis) from pennylane ----------
@@ -433,58 +403,9 @@ class NOFVQE:
     def _mo_integrals_pynof(self):
         mol_local = self.mol
         p = self.p
-        # Compute integrals with PyNOF (from AO to MO)
+        # Compute integrals with PyNOF (from AO to MO) for the nuclear gradient
         S_ao, _, _, self.H_ao, self.I_ao, self.b_mnl, _ = pynof.compute_integrals(p.wfn,mol_local,p)
         self.C_AO_MO = self._read_C_MO(self.C, S_ao,p)
-        # print("C_AO_MO",self.C_AO_MO)
-        
-        # # --- 1e integrals ---
-        # h_MO = self.ao_to_mo_1e(self.H_ao, self.C_AO_MO)
-
-        # # --- 2e integrals (PyNOF-style) ---
-        # D = np.einsum(
-        #     'mi,ni->imn',
-        #     self.C_AO_MO[:, :p.nbf5],
-        #     self.C_AO_MO[:, :p.nbf5],
-        #     optimize=True
-        # )
-
-        # b_pnl = np.tensordot(
-        #     self.C_AO_MO[:, :p.nbf5],
-        #     self.b_mnl,
-        #     axes=([0],[0])
-        # )
-
-        # b_pql = np.einsum(
-        #     'nq,pnl->pql',
-        #     self.C_AO_MO[:, :p.nbf5],
-        #     b_pnl,
-        #     optimize=True
-        # )
-
-        # I_MO = np.einsum(
-        #     'pql,rsl->prsq',
-        #     b_pql,
-        #     b_pql,
-        #     optimize=True
-        # )
-
-        # # h_MO,I_or_b_MO = pynof.JKH_MO_tmp(self.C_AO_MO,self.H_ao,self.I_ao,self.b_mnl,p)
-        # # #J_MO,K_MO,H_core = pynof.computeJKH_MO(self.C_AO_MO,self.H_ao,self.I_ao,self.b_mnl,p)
-        # # if self.p.RI:
-        # #     D = np.einsum('mi,ni->imn', self.C_AO_MO[:,0:p.nbf5], self.C_AO_MO[:,0:p.nbf5],optimize=True)
-        # #     b_pnl = np.tensordot(self.C_AO_MO[:,0:p.nbf5],self.b_mnl, axes=([0],[0]))
-        # #     b_pql = np.einsum('nq,pnl->pql',self.C_AO_MO[:,0:p.nbf5],b_pnl, optimize=True) 
-        # #     I_MO = np.einsum("pql,rsl->prsq", b_pql, b_pql, optimize=True)
-        # #     #b_MO = I_or_b_MO
-        # #     #I_MO = np.einsum("pql,rsl->prsq", b_MO, b_MO, optimize=True)
-        # # else:
-        # #     I_MO = np.transpose(I_or_b_MO, axes=(0,2,1,3))
-        # #     #I_MO = np.transpose(I_or_b_MO, axes=(0,2,3,1))
-        # norb = int(h_MO.shape[0])
-        # E_nuc = mol_local.nuclear_repulsion_energy()
-        # n_elec = p.ne
-        # return jnp.array(E_nuc), jnp.array(h_MO), jnp.array(I_MO), n_elec, norb
     
     def _mo_integrals(self, crd):
         # if self.gradient == "analytics":
@@ -695,6 +616,57 @@ class NOFVQE:
         ck12 = n_outer - Delta - Pi
     
         return E_nuc + E1 + E2, rdm1, n, vecs, cj12, ck12
+    
+    def ene_pnof5(self, params, rdm1=None):
+
+        E_nuc, h_MO, I_MO, n_elec, norb = (
+            self.E_nuc, self.h_MO, self.I_MO, self.n_elec, self.norb
+        )
+
+        F = n_elec // 2  # number of electron pairs
+
+        if rdm1 is None:
+            rdm1 = self._rdm1_from_circuit(params, n_elec, norb)
+
+        # Natural occupations and orbitals
+        n, vecs = self._get_no_on(rdm1, norb, pair_doubles=True)
+
+        # Transform integrals to NO basis
+        h_NO = jnp.einsum("ij,ip,jq->pq", h_MO, vecs, vecs, optimize=True)
+        J_NO = jnp.einsum("ijkl,ip,jq,kq,lp->pq", I_MO, vecs, vecs, vecs, vecs, optimize=True)
+        K_NO = jnp.einsum("ijkl,ip,jp,kq,lq->pq", I_MO, vecs, vecs, vecs, vecs, optimize=True)
+
+        # --- Build CJ and CK (PNOF5) ---
+        cj12 = 2.0 * jnp.outer(n, n)
+        ck12 = jnp.outer(n, n)
+
+        # Pair structure (Ω_g)
+        for g in range(F):
+            p = g                       # strongly occupied orbital
+            q_start = F + g*(norb-F)//F
+            q_end   = q_start + (norb-F)//F
+
+            n_strong = n[p]
+            n_weak = n[q_start:q_end]
+
+            # Remove Coulomb intra-pair
+            cj12 = cj12.at[p, q_start:q_end].set(0.0)
+            cj12 = cj12.at[q_start:q_end, p].set(0.0)
+            cj12 = cj12.at[q_start:q_end, q_start:q_end].set(0.0)
+
+            # Exchange terms
+            ck12 = ck12.at[p, q_start:q_end].set(jnp.sqrt(n_strong * n_weak))
+            ck12 = ck12.at[q_start:q_end, p].set(jnp.sqrt(n_strong * n_weak))
+            ck12 = ck12.at[q_start:q_end, q_start:q_end].set(
+                -jnp.sqrt(jnp.outer(n_weak, n_weak))
+            )
+
+        # --- Energy ---
+        E1 = 2.0 * jnp.sum(n * jnp.diag(h_NO))
+        E2 = jnp.sum(cj12 * J_NO) - jnp.sum(ck12 * K_NO)
+
+        return E_nuc + E1 + E2, rdm1, n, vecs, cj12, ck12
+
 
     # =========================
     # Circuit optimizers
@@ -936,6 +908,7 @@ class NOFVQE:
             )
 
     def ene_vqe(self):
+        print("functional:",self.functional)
         if self.functional == "vqe":
             method_opt = "slsqp"
             print("==== HF_VQE ====")
@@ -955,9 +928,9 @@ class NOFVQE:
             params_final = params_history[-1] if len(params_history) > 0 else params_history
             self.opt_param = params_final
             return E_final, params_final, None, None, None, None, None
-        elif self.functional == "pnof4":
+        elif self.functional in ["pnof4", "pnof5"]:
             E_history, params_history, rdm1_history, n_history, vecs_history, cj12_history, ck12_history = self._vqe(
-                self.ene_pnof4, self.init_param
+                self.ene_nof, self.init_param
                 )
             self.opt_param = params_history[-1]
             self.opt_rdm1 = rdm1_history[-1]
@@ -981,8 +954,8 @@ class NOFVQE:
                 Then, they are recalculated using a real QC.
                 """
                 # E_hybrid, params_hybrid, rdm1_hybrid, n_hybrid, vecs_hybrid, cj12_hybrid, ck12_hybrid = self._vqe(
-                #     self.ene_pnof4, self.opt_param, self.crd, max_iterations=1)
-                E_hybrid, rdm1_hybrid, n_hybrid, vecs_hybrid, cj12_hybrid, ck12_hybrid = self.ene_pnof4(
+                #     self.ene_nof, self.opt_param, self.crd, max_iterations=1)
+                E_hybrid, rdm1_hybrid, n_hybrid, vecs_hybrid, cj12_hybrid, ck12_hybrid = self.ene_nof(
                     self.opt_param)
                 print("==== Hybrid mode activated ====")
                 print("Devise: ",str(self.dev))
@@ -1039,7 +1012,7 @@ class NOFVQE:
                 crds_plus[a, xyz] = crds[a, xyz] + d_shift
                 crds_minus[a, xyz] = crds[a, xyz] - d_shift
 
-                if self.functional != "pnof4":
+                if self.functional not in ["pnof4","pnof5"]:
                     self.pl_mol = qml.qchem.Molecule(
                         symbols=self.symbols,
                         coordinates=crds_plus,
@@ -1054,9 +1027,9 @@ class NOFVQE:
                     E_minus, _, _, _, _, _ = self.ene_hf(params)
                 else:
                     self.E_nuc, self.h_MO, self.I_MO, self.n_elec, self.norb = self._mo_integrals(crds_plus)
-                    E_plus, _, _, _, _, _ = self.ene_pnof4(params, rdm1=rdm1_opt)
+                    E_plus, _, _, _, _, _ = self.ene_nof(params, rdm1=rdm1_opt)
                     self.E_nuc, self.h_MO, self.I_MO, self.n_elec, self.norb = self._mo_integrals(crds_minus)
-                    E_minus, _, _, _, _, _ = self.ene_pnof4(params, rdm1=rdm1_opt)
+                    E_minus, _, _, _, _, _ = self.ene_nof(params, rdm1=rdm1_opt)
                 grad[a, xyz] = (E_plus - E_minus) / (2 * d_shift)
         return grad
 
@@ -1092,7 +1065,7 @@ class NOFVQE:
                 p_start_plus = params_p if warm_start else self.init_param
                 p_start_minus = params_m if warm_start else self.init_param
 
-                if self.functional != "pnof4":
+                if self.functional not in ["pnof4","pnof5"]:
                     self.pl_mol = qml.qchem.Molecule(
                         symbols=self.symbols,
                         coordinates=crds_plus,
@@ -1107,9 +1080,9 @@ class NOFVQE:
                     E_minus, _, _, _, _, _ = self.ene_hf(params)
                 else:
                     self.E_nuc, self.h_MO, self.I_MO, self.n_elec, self.norb = self._mo_integrals(crds_plus)
-                    E_plus, p_plus, _, _, _, _, _ = self._vqe(self.ene_pnof4, p_start_plus)
+                    E_plus, p_plus, _, _, _, _, _ = self._vqe(self.ene_nof, p_start_plus)
                     self.E_nuc, self.h_MO, self.I_MO, self.n_elec, self.norb = self._mo_integrals(crds_minus)
-                    E_minus, p_minus, _, _, _, _, _ = self._vqe(self.ene_pnof4, p_start_minus)
+                    E_minus, p_minus, _, _, _, _, _ = self._vqe(self.ene_nof, p_start_minus)
 
                 # Optional: update warm-start for the next coordinate
                 if warm_start:
@@ -1182,7 +1155,7 @@ if __name__ == "__main__":
         sys.exit(1)
 
     xyz_file = sys.argv[1]
-    functional="pnof4"
+    functional="pnof5"
     #functional="vqe"
     conv_tol=1e-7
     #init_param=0.1
@@ -1221,12 +1194,18 @@ if __name__ == "__main__":
     if pair_double:
         E_min, params_opt, rdm1_opt, n, vecs, cj12, ck12 = cal.run_scnofvqe()
         print("Min Ene VQE and param:", E_min, params_opt)
+        # Nuclear gradient
+        grad = cal.grad()
+        print(f"Nuclear gradient ({gradient}):\n", grad)
+        print(f"Nuclear gradient norm:\n", np.linalg.norm(grad))
+        
     else:
         E_min, params_opt, rdm1_opt, n, vecs, cj12, ck12 = cal.ene_vqe()
         print("Min Ene VQE and param:", E_min, params_opt)
         # Nuclear gradient
         grad = cal.grad()
         print(f"Nuclear gradient ({gradient}):\n", grad)
+        print(f"Nuclear gradient norm:\n", np.linalg.norm(grad))
         
     # Run VQE
     # E_h, params_h, rdm1_h, n_h, vecs_h, cj12_h, ck12_h=cal._vqe(cal.ene_pnof4, init_param, crds, method="adam")
