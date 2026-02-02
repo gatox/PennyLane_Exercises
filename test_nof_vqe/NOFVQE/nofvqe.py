@@ -242,6 +242,25 @@ class NOFVQE:
                     pair_doubles.append(d)
         return pair_doubles
     
+    def _filter_pnof5e_doubles(self, doubles, Omega):
+        """
+        Keep only doubles consistent with PNOF5e Ω structure
+        """
+        allowed = []
+
+        for d in doubles:
+            i, j, a, b = d
+            for Omega_g in Omega:
+                occ = Omega_g[0]
+                virt = set(Omega_g[1:])
+                if {i, j} == {2*occ, 2*occ + 1}:
+                    if a in virt and b in virt:
+                        allowed.append(d)
+                    break
+
+        return allowed
+
+    
     def _read_C_MO(self, C,S_ao,p):
         if self.C_AO_MO is None:
             if C is None:
@@ -420,7 +439,10 @@ class NOFVQE:
             self.singles = []
 
             # Keep only pair doubles
-            self.doubles = self._filter_pair_doubles(self.doubles)   
+            #self.doubles = self._filter_pair_doubles(self.doubles)
+            Omega = self._build_pnof5e_omega(norb, n_elec)
+            print("Omega:",Omega)
+            self.doubles = self._filter_pnof5e_doubles(self.doubles, Omega)  
         
         print("Size Singles:",len(self.singles))
         print("Singles:",self.singles)
@@ -432,6 +454,26 @@ class NOFVQE:
         p = np.asarray(p, dtype=float)
         # Map each parameter to (-pi, pi]
         return ((p + np.pi) % (2*np.pi)) - np.pi
+    
+    def _build_pnof5e_omega(self, norb, n_elec):
+        """
+        Deterministic Ω_g construction for PNOF5e
+        """
+        F = n_elec // 2
+        Nv = norb - F
+        assert Nv % F == 0, "Virtual space not divisible by number of pairs"
+
+        n_w = Nv // F
+        Omega = []
+
+        for g in range(F):
+            Omega_g = [g]
+            for k in range(n_w):
+                Omega_g.append(F + g + k * F)
+            Omega.append(Omega_g)
+
+        return Omega
+
 
     # ---------- measure 1-RDM on the circuit ----------
     #def _rdm1_from_circuit(self, params, n_elec, norb, region="eu-de", allow_fallback=False):
