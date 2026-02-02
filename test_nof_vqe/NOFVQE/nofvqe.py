@@ -75,29 +75,45 @@ class NOFVQE:
 
     @staticmethod
     def _get_no_on(rdm1, norb, pair_doubles):
-        if pair_doubles:
-            rdm1 = 0.5 * (rdm1 + rdm1.T)   # Hermitianize
+        # if pair_doubles:
+        #     rdm1 = 0.5 * (rdm1 + rdm1.T)   # Hermitianize
             
-            # occupation numbers are the diagonal
-            n = jnp.diag(rdm1)
+        #     # occupation numbers are the diagonal
+        #     n = jnp.diag(rdm1)
             
-            # natural orbitals are already the basis
-            vecs = jnp.eye(norb)
-        else:
-            rdm1_aa = jnp.zeros((norb, norb))
+        #     # natural orbitals are already the basis
+        #     vecs = jnp.eye(norb)
+        # else:
+        #     rdm1_aa = jnp.zeros((norb, norb))
         
-            i = -1
-            for p in range(0, norb):
-                for q in range(p, norb):
-                    i = i + 1
-                    val = jnp.squeeze(rdm1[i])
-                    rdm1_aa = rdm1_aa.at[p, q].set(val)
-                    rdm1_aa = rdm1_aa.at[q, p].set(val)
+        #     i = -1
+        #     for p in range(0, norb):
+        #         for q in range(p, norb):
+        #             i = i + 1
+        #             val = jnp.squeeze(rdm1[i])
+        #             rdm1_aa = rdm1_aa.at[p, q].set(val)
+        #             rdm1_aa = rdm1_aa.at[q, p].set(val)
         
-            n, vecs = jnp.linalg.eigh(rdm1_aa)
+        #     n, vecs = jnp.linalg.eigh(rdm1_aa)
         
-            n = n[::-1]
-            vecs = vecs[:, ::-1]
+        #     n = n[::-1]
+        #     vecs = vecs[:, ::-1]
+        print("RDM1_Edison:",rdm1)
+        rdm1_aa = jnp.zeros((norb, norb))
+        i = -1
+        for p in range(0, norb):
+            for q in range(p, norb):
+                i = i + 1
+                val = jnp.squeeze(rdm1[i])
+                rdm1_aa = rdm1_aa.at[p, q].set(val)
+                rdm1_aa = rdm1_aa.at[q, p].set(val)
+    
+        n, vecs = jnp.linalg.eigh(rdm1_aa)
+    
+        n = n[::-1]
+        vecs = vecs[:, ::-1]
+        print("ON_Edison:",n)
+        print("NO_Edison:",vecs)
         return n, vecs
         
     
@@ -441,8 +457,9 @@ class NOFVQE:
             # Keep only pair doubles
             #self.doubles = self._filter_pair_doubles(self.doubles)
             Omega = self._build_pnof5e_omega(norb, n_elec)
-            print("Omega:",Omega)
-            self.doubles = self._filter_pnof5e_doubles(self.doubles, Omega)  
+            self.doubles = Omega
+            #print("Omega:",Omega)
+            print("doubles:",self.doubles) 
         
         print("Size Singles:",len(self.singles))
         print("Singles:",self.singles)
@@ -455,6 +472,22 @@ class NOFVQE:
         # Map each parameter to (-pi, pi]
         return ((p + np.pi) % (2*np.pi)) - np.pi
     
+    def _spin_orbital_pairs(self, start, n_pairs):
+        """
+        Build consecutive spin-orbital pairs:
+        [[start, start+1], [start+2, start+3], ...]
+        """
+        return [[start + 2*i, start + 2*i + 1] for i in range(n_pairs)]
+    
+    def _omega_subspaces(self, virtual_pairs, F):
+        """
+        Split virtual MO pairs into Ω-subspaces of size F
+        """
+        return [
+            virtual_pairs[i*F:(i+1)*F]
+            for i in range(len(virtual_pairs) // F)
+        ]
+
     def _build_pnof5e_omega(self, norb, n_elec):
         """
         Deterministic Ω_g construction for PNOF5e
@@ -463,16 +496,21 @@ class NOFVQE:
         Nv = norb - F
         assert Nv % F == 0, "Virtual space not divisible by number of pairs"
 
-        n_w = Nv // F
-        Omega = []
+        occ_pairs = self._spin_orbital_pairs(0, F)[::-1]
 
-        for g in range(F):
-            Omega_g = [g]
-            for k in range(n_w):
-                Omega_g.append(F + g + k * F)
-            Omega.append(Omega_g)
+        virt_pairs = self._spin_orbital_pairs(2*F, norb - F)
 
-        return Omega
+        omegas = self._omega_subspaces(virt_pairs, F)
+
+        # Build excitations
+        doubles = []
+        for i, occ in enumerate(occ_pairs):
+            if i >= len(omegas):
+                break
+            for virt in omegas[i]:
+                doubles.append(occ + virt)
+
+        return doubles
 
 
     # ---------- measure 1-RDM on the circuit ----------
@@ -551,24 +589,29 @@ class NOFVQE:
             self._ansatz_2(theta, hf_state, qubits)
             return [qml.expval(op) for op in self._build_rdm1_ops(norb)]
 
-        if self.pair_doubles:
-            rdm1_ut = jnp.array(rdm1_qnode(params))  # length = norb*(norb+1)//2
+        # if self.pair_doubles:
+        #     rdm1_ut = jnp.array(rdm1_qnode(params))  # length = norb*(norb+1)//2
 
-            rdm1 = jnp.zeros((norb, norb))
-            k = 0
-            for p in range(norb):
-                for q in range(p, norb):
-                    rdm1 = rdm1.at[p, q].set(rdm1_ut[k])
-                    rdm1 = rdm1.at[q, p].set(rdm1_ut[k])
-                    k += 1
-            assert rdm1.ndim == 2 and rdm1.shape[0] == rdm1.shape[1], \
-            f"RDM1 has invalid shape {rdm1.shape}"
-        else:
-            params = jnp.atleast_1d(jnp.asarray(params))
-            rdm1 = jnp.array(rdm1_qnode(params))
-            # Flatten rdm1 if using SLSQP or L-BFGS-B
-            if self.opt_circ in ["slsqp", "l-bfgs-b", "cobyla"]:
-                rdm1 = rdm1.flatten()
+        #     rdm1 = jnp.zeros((norb, norb))
+        #     k = 0
+        #     for p in range(norb):
+        #         for q in range(p, norb):
+        #             rdm1 = rdm1.at[p, q].set(rdm1_ut[k])
+        #             rdm1 = rdm1.at[q, p].set(rdm1_ut[k])
+        #             k += 1
+        #     assert rdm1.ndim == 2 and rdm1.shape[0] == rdm1.shape[1], \
+        #     f"RDM1 has invalid shape {rdm1.shape}"
+        # else:
+        #     params = jnp.atleast_1d(jnp.asarray(params))
+        #     rdm1 = jnp.array(rdm1_qnode(params))
+        #     # Flatten rdm1 if using SLSQP or L-BFGS-B
+        #     if self.opt_circ in ["slsqp", "l-bfgs-b", "cobyla"]:
+        #         rdm1 = rdm1.flatten()
+        params = jnp.atleast_1d(jnp.asarray(params))
+        rdm1 = jnp.array(rdm1_qnode(params))
+        # Flatten rdm1 if using SLSQP or L-BFGS-B
+        if self.opt_circ in ["slsqp", "l-bfgs-b", "cobyla"]:
+            rdm1 = rdm1.flatten()
         return rdm1
     
     def ene_hf(self, params):
@@ -749,7 +792,8 @@ class NOFVQE:
         n, vecs = self._get_no_on(rdm1, norb, pair_doubles=True)
         
         # >>> ADD HERE <<<
-        Omega = self.build_pnof5_omega_from_occupations(n, norb, tol=1e-8)
+        #Omega = self.build_pnof5_omega_from_occupations(n, norb, tol=1e-8)
+        print("Omega inside energy:",Omega)
         
         # Rotation NO
         if kappa_params is not None:
