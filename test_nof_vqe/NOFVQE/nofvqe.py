@@ -648,40 +648,44 @@ class NOFVQE:
 
         return E_nuc + E1 + E2, rdm1, n, vecs, cj12, ck12
     
-    def build_pnof5_pair_array(self, n, n_elec, norb):
-        F = n_elec // 2
-        idx = jnp.argsort(-n)
-
+    def build_pnof5_pair_array(self, Omega, norb):
+        """
+        Build fixed pair mapping from Ω_g structure.
+        Each orbital is paired only with its Ω_g partners.
+        """
         pair = -jnp.ones(norb, dtype=jnp.int64)
 
-        for g in range(F):
-            p = idx[g]
-            q = idx[2*F - 1 - g]
-            pair = pair.at[p].set(q)
-            pair = pair.at[q].set(p)
+        for Omega_g in Omega:
+            g0 = Omega_g[0]      # strong orbital
+            for q in Omega_g[1:]:
+                pair = pair.at[g0].set(q)
+                pair = pair.at[q].set(g0)
+
         return pair
+
     
     def build_kappa_pairs(self, kappa_params, pair_of, norb):
         K = jnp.zeros((norb, norb))
-
         idx = 0
+
         for p in range(norb):
-            q = pair_of[p]
+            for q in range(p+1, norb):
 
-            # Only allow inter-pair rotations
-            if q <= p:
-                continue
+                # forbid intra-pair rotations
+                if pair_of[p] == q:
+                    continue
 
-            if idx >= len(kappa_params):
-                break
+                if idx >= len(kappa_params):
+                    break
 
-            k = kappa_params[idx]
-            idx += 1
+                k = kappa_params[idx]
+                idx += 1
 
-            K = K.at[p, q].set( k)
-            K = K.at[q, p].set(-k)
+                K = K.at[p, q].set(k)
+                K = K.at[q, p].set(-k)
 
         return K
+
 
 
     def rotate_orbitals(self, vecs, kappa_params, pair_of):
@@ -736,10 +740,10 @@ class NOFVQE:
         
         # >>> ADD HERE <<<
         Omega, strong, weak = self.build_pnof5e_omega_strong_weak(norb, n_elec)
-
+        pair_of = self.build_pnof5_pair_array(Omega, norb)
         # Rotation NO
         if kappa_params is not None:
-            vecs = self.rotate_orbitals(vecs, kappa_params, Omega)
+            vecs = self.rotate_orbitals(vecs, kappa_params, pair_of)
         
         # Transform integrals to NO basis
         h_NO = jnp.einsum("ij,ip,jq->pq", h_MO, vecs, vecs, optimize=True)
