@@ -87,8 +87,6 @@ class NOFVQE:
         if pair_doubles:
             n = jnp.diag(rdm1_aa)
             vecs = jnp.eye(norb)
-            print("ON_Edison double pair:",n)
-            print("NO_Edison double pair:",vecs)
             return n, vecs
 
         # Otherwise, do the general case
@@ -229,35 +227,6 @@ class NOFVQE:
                     cpaq += coeff * op
                 ops.append(cpaq)
         return ops
-    
-    # ---------------- Filter pair ansatz ----------------
-    def _filter_pair_doubles(self, doubles):
-        pair_doubles = []
-        for d in doubles:
-            i, j, a, b = d
-            if (j == i + 1) and (b == a + 1):
-                if (i % 2 == 0) and (a % 2 == 0):
-                    pair_doubles.append(d)
-        return pair_doubles
-    
-    def _filter_pnof5e_doubles(self, doubles, Omega):
-        """
-        Keep only doubles consistent with PNOF5e Ω structure
-        """
-        allowed = []
-
-        for d in doubles:
-            i, j, a, b = d
-            for Omega_g in Omega:
-                occ = Omega_g[0]
-                virt = set(Omega_g[1:])
-                if {i, j} == {2*occ, 2*occ + 1}:
-                    if a in virt and b in virt:
-                        allowed.append(d)
-                    break
-
-        return allowed
-
     
     def _read_C_MO(self, C,S_ao,p):
         if self.C_AO_MO is None:
@@ -439,10 +408,7 @@ class NOFVQE:
             # Keep only pair doubles
             #self.doubles = self._filter_pair_doubles(self.doubles)
             Omega = self._build_pnof5e_omega(norb, n_elec)
-            self.doubles = Omega
-            #print("Omega:",Omega)
-            print("doubles:",self.doubles) 
-        
+            self.doubles = Omega 
         print("Size Singles:",len(self.singles))
         print("Singles:",self.singles)
         print("Size Doubles:",len(self.doubles))
@@ -476,6 +442,7 @@ class NOFVQE:
         """
         F = n_elec // 2
         Nv = norb - F
+        
         assert Nv % F == 0, "Virtual space not divisible by number of pairs"
 
         occ_pairs = self._spin_orbital_pairs(0, F)[::-1]
@@ -591,7 +558,6 @@ class NOFVQE:
         #         rdm1 = rdm1.flatten()
         params = jnp.atleast_1d(jnp.asarray(params))
         rdm1 = jnp.array(rdm1_qnode(params))
-        print("RDM1_Edison:",rdm1)
         # Flatten rdm1 if using SLSQP or L-BFGS-B
         if self.opt_circ in ["slsqp", "l-bfgs-b", "cobyla"]:
             rdm1 = rdm1.flatten()
@@ -770,8 +736,7 @@ class NOFVQE:
         
         # >>> ADD HERE <<<
         Omega, strong, weak = self.build_pnof5e_omega_strong_weak(norb, n_elec)
-        print("Omega inside energy:",Omega)
-        
+
         # Rotation NO
         if kappa_params is not None:
             vecs = self.rotate_orbitals(vecs, kappa_params, Omega)
@@ -815,44 +780,26 @@ class NOFVQE:
         #     Omega_0.append(Omega_g0)
         # print("EDISON_Omega_0:", Omega_0)
         
-        E = 0.0
         Eg = 0.0
-
-        n_pairs = len(Omega)
+        E_pair = 0.0
         for g in range(F):
             for p in Omega[g]:
                 Eg +=2.0 * n[p] * h_NO[p, p]
             Eg += n[g]*J_NO[g, g]
             for q in Omega[g][-F:]:
                 Eg -= 2.0 *jnp.sqrt(n[g] * n[q]) * K_NO[q, g]
-            for l in Omega[g]:
+            for l in Omega[g][-F:]:
                 for m in Omega[g][-F:]:
                     Eg += jnp.sqrt(n[m] * n[l]) * K_NO[l, m]
-        print("Energy Final:", Eg)
-                
-        
-        
-
-        # # ---- one-body ----
-        # for p in range(norb):
-        #     E += 2.0 * n[p] * h_NO[p, p] + n[p] * J_NO[p, p]
-        
-        # n_pairs = len(Omega)
-        # # ---- inter-pair ----
-        # for g in range(n_pairs):
-        #     for f in range(g + 1,n_pairs):
-        #         for p in Omega[g]:
-        #             for q in Omega[f]:
-        #                 E += n[p] * n[q] * (2.0 * J_NO[p, q] - K_NO[p, q])
-
-        # # ---- intra-pair exchange ----
-        # for g in range(n_pairs):
-        #     for p in Omega[g]:
-        #         for q in Omega[g]:
-        #             if q > p:
-        #                 E -= 2.0 * jnp.sqrt(n[p] * n[q]) * K_NO[p, q]
-
-        return E_nuc + E, rdm1, n, vecs, cj12, ck12
+                    
+        for j in range(F):
+            for k in range(F):
+                if j!=k:
+                    for r in Omega[j]:
+                        for s in Omega[k]:
+                            E_pair += n[s] * n[r] *(2*J_NO[r, s]-K_NO[r, s])  
+    
+        return E_nuc + Eg + E_pair, rdm1, n, vecs, cj12, ck12
 
     # =========================
     # Circuit optimizers
@@ -1485,6 +1432,10 @@ if __name__ == "__main__":
         #E_min, params_opt, rdm1_opt, n, vecs, cj12, ck12 = cal.run_scnofvqe()
         E_min, params_opt, rdm1_opt, n, vecs, cj12, ck12 = cal.ene_vqe()
         print("Min Ene VQE and param:", E_min, params_opt)
+        print("RDM1_opt:",rdm1_opt)
+        print("ON:",n)
+        print("NO:",vecs)
+        
     else:
         E_min, params_opt, rdm1_opt, n, vecs, cj12, ck12 = cal.ene_vqe()
         print("Min Ene VQE and param:", E_min, params_opt)
