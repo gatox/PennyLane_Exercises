@@ -75,47 +75,29 @@ class NOFVQE:
 
     @staticmethod
     def _get_no_on(rdm1, norb, pair_doubles):
-        # if pair_doubles:
-        #     rdm1 = 0.5 * (rdm1 + rdm1.T)   # Hermitianize
-            
-        #     # occupation numbers are the diagonal
-        #     n = jnp.diag(rdm1)
-            
-        #     # natural orbitals are already the basis
-        #     vecs = jnp.eye(norb)
-        # else:
-        #     rdm1_aa = jnp.zeros((norb, norb))
-        
-        #     i = -1
-        #     for p in range(0, norb):
-        #         for q in range(p, norb):
-        #             i = i + 1
-        #             val = jnp.squeeze(rdm1[i])
-        #             rdm1_aa = rdm1_aa.at[p, q].set(val)
-        #             rdm1_aa = rdm1_aa.at[q, p].set(val)
-        
-        #     n, vecs = jnp.linalg.eigh(rdm1_aa)
-        
-        #     n = n[::-1]
-        #     vecs = vecs[:, ::-1]
-        print("RDM1_Edison:",rdm1)
         rdm1_aa = jnp.zeros((norb, norb))
         i = -1
-        for p in range(0, norb):
+        for p in range(norb):
             for q in range(p, norb):
-                i = i + 1
+                i += 1
                 val = jnp.squeeze(rdm1[i])
                 rdm1_aa = rdm1_aa.at[p, q].set(val)
                 rdm1_aa = rdm1_aa.at[q, p].set(val)
-    
+        # If we enforce Ωg and only pair doubles → RDM1 already diagonal
+        if pair_doubles:
+            n = jnp.diag(rdm1_aa)
+            vecs = jnp.eye(norb)
+            print("ON_Edison double pair:",n)
+            print("NO_Edison double pair:",vecs)
+            return n, vecs
+
+        # Otherwise, do the general case
         n, vecs = jnp.linalg.eigh(rdm1_aa)
-    
         n = n[::-1]
         vecs = vecs[:, ::-1]
         print("ON_Edison:",n)
         print("NO_Edison:",vecs)
         return n, vecs
-        
     
     @staticmethod
     def _func_indix(functional):
@@ -609,6 +591,7 @@ class NOFVQE:
         #         rdm1 = rdm1.flatten()
         params = jnp.atleast_1d(jnp.asarray(params))
         rdm1 = jnp.array(rdm1_qnode(params))
+        print("RDM1_Edison:",rdm1)
         # Flatten rdm1 if using SLSQP or L-BFGS-B
         if self.opt_circ in ["slsqp", "l-bfgs-b", "cobyla"]:
             rdm1 = rdm1.flatten()
@@ -741,34 +724,28 @@ class NOFVQE:
         U = expm(K)
         return vecs @ U
     
-    def build_pnof5_omega_from_occupations(self, n, norb, tol=1e-8):
+    def build_pnof5e_omega_strong_weak(self, norb, n_elec):
+        """
+        Deterministic PNOF5e Ω_g construction.
+        """
+        F = n_elec // 2
+        assert norb >= F
+
+        strong = list(range(F))
+
+        virtuals = list(range(F, norb))
+        assert len(virtuals) % F == 0
+
+        weak_g = [virtuals[i:i+F] for i in range(0,len(virtuals), F)]
+        weak_g = weak_g[::-1]
+        
         Omega = []
         
-        strong = [p for p in range(norb) if n[p] > 0.5 and (1.0 - n[p]) > tol]
-        weak = [p for p in range(norb) if n[p] <= 0.5]
-        print("Strong:",strong)
-        print("weak:",weak)
-        
-        used_weak = set()
-
-        for g in strong:
-            Omega_g = [g]
-            remaining = 1.0 - n[g]
-
-            for q in weak:
-                if q in used_weak:
-                    continue
-                if remaining <= tol:
-                    break
-
-                Omega_g.append(q)
-                remaining -= n[q]
-                used_weak.add(q)
-
-            Omega.append(Omega_g)
-        print("Omega:",Omega)
-        return Omega
-
+        for k,wg in zip(strong,weak_g):
+            t = [k]
+            t.extend(wg)
+            Omega.append(t) 
+        return Omega, strong, weak_g
 
     def ene_pnof4(self, x, rdm1=None):
         E_nuc, h_MO, I_MO, n_elec, norb = (
@@ -787,12 +764,12 @@ class NOFVQE:
         
         if rdm1 is None:
             rdm1 = self._rdm1_from_circuit(params, n_elec, norb)
-
+            
         # Natural occupations and orbitals
         n, vecs = self._get_no_on(rdm1, norb, pair_doubles=True)
         
         # >>> ADD HERE <<<
-        #Omega = self.build_pnof5_omega_from_occupations(n, norb, tol=1e-8)
+        Omega, strong, weak = self.build_pnof5e_omega_strong_weak(norb, n_elec)
         print("Omega inside energy:",Omega)
         
         # Rotation NO
@@ -808,55 +785,72 @@ class NOFVQE:
         cj12 = 2.0 * jnp.outer(n, n)
         ck12 = jnp.outer(n, n)
         
-        # # Pair structure (Ω_g)
-        # for g in range(F):
-        #     p = g  # strongly occupied orbital
-        #     q_start = F + g * n_w
-        #     q_end   = q_start + n_w
-        #     n_strong = n[p]
-        #     n_weak = n[q_start:q_end]
+        n_w = len(weak)
+        # Pair structure (Ω_g)
+        for g in range(F):
+            p = g  # strongly occupied orbital
+            q_start = F + g * n_w
+            q_end   = q_start + n_w
+            n_strong = n[p]
+            n_weak = n[q_start:q_end]
 
-        #     # Remove Coulomb intra-pair
-        #     cj12 = cj12.at[p, q_start:q_end].set(0.0)
-        #     cj12 = cj12.at[q_start:q_end, p].set(0.0)
-        #     cj12 = cj12.at[q_start:q_end, q_start:q_end].set(0.0)
+            # Remove Coulomb intra-pair
+            cj12 = cj12.at[p, q_start:q_end].set(0.0)
+            cj12 = cj12.at[q_start:q_end, p].set(0.0)
+            cj12 = cj12.at[q_start:q_end, q_start:q_end].set(0.0)
 
-        #     # Exchange terms
-        #     ck12 = ck12.at[p, q_start:q_end].set(jnp.sqrt(n_strong * n_weak))
-        #     ck12 = ck12.at[q_start:q_end, p].set(jnp.sqrt(n_strong * n_weak))
-        #     ck12 = ck12.at[q_start:q_end, q_start:q_end].set(
-        #         -jnp.sqrt(jnp.outer(n_weak, n_weak))
-        #     )
+            # Exchange terms
+            ck12 = ck12.at[p, q_start:q_end].set(jnp.sqrt(n_strong * n_weak))
+            ck12 = ck12.at[q_start:q_end, p].set(jnp.sqrt(n_strong * n_weak))
+            ck12 = ck12.at[q_start:q_end, q_start:q_end].set(
+                -jnp.sqrt(jnp.outer(n_weak, n_weak))
+            )
         
-        
-        # Omega = []
+        # We have to change the way to pair them 
+        # Omega_0 = []
         # for g in range(F):
         #     start = F + g * n_w
         #     end   = start + n_w
-        #     Omega_g = [g] + list(range(start, end))
-        #     Omega.append(Omega_g)
-        #     print("Omega_g:",Omega_g)
+        #     Omega_g0 = [g] + list(range(start, end))
+        #     Omega_0.append(Omega_g0)
+        # print("EDISON_Omega_0:", Omega_0)
         
         E = 0.0
+        Eg = 0.0
 
-        # ---- one-body ----
-        for p in range(norb):
-            E += 2.0 * n[p] * h_NO[p, p] + n[p] * J_NO[p, p]
-        
         n_pairs = len(Omega)
-        # ---- inter-pair ----
-        for g in range(n_pairs):
-            for f in range(g + 1,n_pairs):
-                for p in Omega[g]:
-                    for q in Omega[f]:
-                        E += n[p] * n[q] * (2.0 * J_NO[p, q] - K_NO[p, q])
-
-        # ---- intra-pair exchange ----
-        for g in range(n_pairs):
+        for g in range(F):
             for p in Omega[g]:
-                for q in Omega[g]:
-                    if q > p:
-                        E -= 2.0 * jnp.sqrt(n[p] * n[q]) * K_NO[p, q]
+                Eg +=2.0 * n[p] * h_NO[p, p]
+            Eg += n[g]*J_NO[g, g]
+            for q in Omega[g][-F:]:
+                Eg -= 2.0 *jnp.sqrt(n[g] * n[q]) * K_NO[q, g]
+            for l in Omega[g]:
+                for m in Omega[g][-F:]:
+                    Eg += jnp.sqrt(n[m] * n[l]) * K_NO[l, m]
+        print("Energy Final:", Eg)
+                
+        
+        
+
+        # # ---- one-body ----
+        # for p in range(norb):
+        #     E += 2.0 * n[p] * h_NO[p, p] + n[p] * J_NO[p, p]
+        
+        # n_pairs = len(Omega)
+        # # ---- inter-pair ----
+        # for g in range(n_pairs):
+        #     for f in range(g + 1,n_pairs):
+        #         for p in Omega[g]:
+        #             for q in Omega[f]:
+        #                 E += n[p] * n[q] * (2.0 * J_NO[p, q] - K_NO[p, q])
+
+        # # ---- intra-pair exchange ----
+        # for g in range(n_pairs):
+        #     for p in Omega[g]:
+        #         for q in Omega[g]:
+        #             if q > p:
+        #                 E -= 2.0 * jnp.sqrt(n[p] * n[q]) * K_NO[p, q]
 
         return E_nuc + E, rdm1, n, vecs, cj12, ck12
 
