@@ -424,46 +424,66 @@ class NOFVQE:
         # Map each parameter to (-pi, pi]
         return ((p + np.pi) % (2*np.pi)) - np.pi
     
-    def _spin_orbital_pairs(self, start, n_pairs):
-        """
-        Build consecutive spin-orbital pairs:
-        [[start, start+1], [start+2, start+3], ...]
-        """
-        return [[start + 2*i, start + 2*i + 1] for i in range(n_pairs)]
+    # def _spin_orbital_pairs(self, start, n_pairs):
+    #     """
+    #     Build consecutive spin-orbital pairs:
+    #     [[start, start+1], [start+2, start+3], ...]
+    #     """
+    #     return [[start + 2*i, start + 2*i + 1] for i in range(n_pairs)]
     
-    def _omega_subspaces(self, virtual_pairs, F):
-        """
-        Split virtual MO pairs into Ω-subspaces of size F
-        """
-        return [
-            virtual_pairs[i*F:(i+1)*F]
-            for i in range(len(virtual_pairs) // F)
-        ]
-
+    # def _omega_subspaces(self, virtual_pairs, F):
+    #     """
+    #     Split virtual MO pairs into Ω-subspaces of size F
+    #     """
+    #     return [
+    #         virtual_pairs[i*F:(i+1)*F]
+    #         for i in range(len(virtual_pairs) // F)
+        # ]
+        
     def _build_pnof5e_omega(self, norb, n_elec):
+        Omega_mo, strong, weak_g = self._build_pnof5e_omega_strong_weak(
+            norb, n_elec
+        )
+
+        Omega_spin = []
+
+        for omega in Omega_mo:
+            g = omega[0]          # strong orbital
+            weak_orbs = omega[1:] # weak orbitals in Ω_g
+
+            g_spin = [2*g, 2*g + 1]
+
+            for q in weak_orbs:
+                q_spin = [2*q, 2*q + 1]
+                Omega_spin.append(g_spin + q_spin)
+
+        return Omega_spin
+        
+
+    def _build_pnof5e_omega_strong_weak(self, norb, n_elec):
         """
         Deterministic Ω_g construction for PNOF5e
         """
         F = n_elec // 2
-        Nv = norb - F
-        
-        assert Nv % F == 0, "Virtual space not divisible by number of pairs"
+        strong = list(range(F))
+        weak = list(range(F, norb))
+        omega_dim = (norb-F)//F
+        if omega_dim == 0:
+            omega_dim =1
 
-        occ_pairs = self._spin_orbital_pairs(0, F)[::-1]
+        Omega = []
+        weak_idx = 0
 
-        virt_pairs = self._spin_orbital_pairs(2*F, norb - F)
-
-        omegas = self._omega_subspaces(virt_pairs, F)
-
-        # Build excitations
-        doubles = []
-        for i, occ in enumerate(occ_pairs):
-            if i >= len(omegas):
+        for g in list(range(omega_dim)):
+            if weak_idx >= len(weak):
                 break
-            for virt in omegas[i]:
-                doubles.append(occ + virt)
 
-        return doubles
+            wg = weak[weak_idx: weak_idx + F]
+    
+            weak_idx += len(wg)
+
+            Omega.append([F-g-1] + wg)
+        return Omega, strong, weak
 
 
     # ---------- measure 1-RDM on the circuit ----------
@@ -695,29 +715,6 @@ class NOFVQE:
         K = self.build_kappa_pairs(kappa_params, pair_of, norb)
         U = expm(K)
         return vecs @ U
-    
-    def build_pnof5e_omega_strong_weak(self, norb, n_elec):
-        """
-        Deterministic PNOF5e Ω_g construction.
-        """
-        F = n_elec // 2
-        assert norb >= F
-
-        strong = list(range(F))
-
-        virtuals = list(range(F, norb))
-        assert len(virtuals) % F == 0
-
-        weak_g = [virtuals[i:i+F] for i in range(0,len(virtuals), F)]
-        weak_g = weak_g[::-1]
-        
-        Omega = []
-        
-        for k,wg in zip(strong,weak_g):
-            t = [k]
-            t.extend(wg)
-            Omega.append(t) 
-        return Omega, strong, weak_g
 
     def ene_pnof4(self, x, rdm1=None):
         E_nuc, h_MO, I_MO, n_elec, norb = (
@@ -732,7 +729,7 @@ class NOFVQE:
             params = x
             kappa_params = None
 
-        F = n_elec // 2  # number of electron pairs (Fermi level)
+        #F = n_elec // 2  # number of electron pairs (Fermi level)
         
         if rdm1 is None:
             rdm1 = self._rdm1_from_circuit(params, n_elec, norb)
@@ -741,7 +738,8 @@ class NOFVQE:
         n, vecs = self._get_no_on(rdm1, norb, pair_doubles=True)
         
         # >>> ADD HERE <<<
-        Omega, strong, weak = self.build_pnof5e_omega_strong_weak(norb, n_elec)
+        Omega, strong, weak = self._build_pnof5e_omega_strong_weak(norb, n_elec)
+        dim_g = len(Omega)
         pair_of = self.build_pnof5_pair_array(Omega, norb)
         # Rotation NO
         if kappa_params is not None:
@@ -758,9 +756,9 @@ class NOFVQE:
         
         n_w = len(weak)
         # Pair structure (Ω_g)
-        for g in range(F):
+        for g in range(dim_g):
             p = g  # strongly occupied orbital
-            q_start = F + g * n_w
+            q_start = dim_g + g * n_w
             q_end   = q_start + n_w
             n_strong = n[p]
             n_weak = n[q_start:q_end]
@@ -788,18 +786,18 @@ class NOFVQE:
         
         Eg = 0.0
         E_pair = 0.0
-        for g in range(F):
+        for g in range(dim_g):
             for p in Omega[g]:
                 Eg +=2.0 * n[p] * h_NO[p, p]
             Eg += n[g]*J_NO[g, g]
-            for q in Omega[g][-F:]:
+            for q in Omega[g][-dim_g:]:
                 Eg -= 2.0 *jnp.sqrt(n[g] * n[q]) * K_NO[q, g]
-            for l in Omega[g][-F:]:
-                for m in Omega[g][-F:]:
+            for l in Omega[g][-dim_g:]:
+                for m in Omega[g][-dim_g:]:
                     Eg += jnp.sqrt(n[m] * n[l]) * K_NO[l, m]
                     
-        for j in range(F):
-            for k in range(F):
+        for j in range(dim_g):
+            for k in range(dim_g):
                 if j!=k:
                     for r in Omega[j]:
                         for s in Omega[k]:
@@ -987,7 +985,7 @@ class NOFVQE:
         # -------------------------------------------------
         # STAGE 2 — θ + κ (orbital optimization)
         # -------------------------------------------------
-        self.optimize_kappa = False
+        self.optimize_kappa = True
 
         n_kappa = self.n_kappa  # you already define this
         kappa0 = np.zeros(n_kappa)
