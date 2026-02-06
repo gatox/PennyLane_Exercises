@@ -401,6 +401,10 @@ class NOFVQE:
             
         self.singles, self.doubles = qml.qchem.excitations(n_elec, 2 * norb)
         
+        print("number of electrons:",n_elec)
+        print("number of MO:",norb)
+        print("Size Doubles before:",len(self.doubles))
+        print("Doubles before:",self.doubles)
         if self.pair_doubles:
             # Kill singles completely (seniority-zero ansatz)
             self.singles = []
@@ -685,8 +689,6 @@ class NOFVQE:
                 K = K.at[q, p].set(-k)
 
         return K
-
-
 
     def rotate_orbitals(self, vecs, kappa_params, pair_of):
         norb = vecs.shape[0]
