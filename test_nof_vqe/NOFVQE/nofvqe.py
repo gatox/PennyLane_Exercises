@@ -75,6 +75,7 @@ class NOFVQE:
 
     @staticmethod
     def _get_no_on(rdm1, norb, pair_doubles):
+        print("Edison_initial rdm1 from VQE:",rdm1)
         rdm1_aa = jnp.zeros((norb, norb))
         i = -1
         for p in range(norb):
@@ -729,16 +730,20 @@ class NOFVQE:
             params = x
             kappa_params = None
 
-        #F = n_elec // 2  # number of electron pairs (Fermi level)
+        F = n_elec // 2  # number of electron pairs (Fermi level)
         
         if rdm1 is None:
             rdm1 = self._rdm1_from_circuit(params, n_elec, norb)
             
         # Natural occupations and orbitals
         n, vecs = self._get_no_on(rdm1, norb, pair_doubles=True)
-        
+        print("n_Edison:",n)
+        print("vec_Edison:",vecs)
         # >>> ADD HERE <<<
         Omega, strong, weak = self._build_pnof5e_omega_strong_weak(norb, n_elec)
+        print("Omega:",Omega)
+        print("strong:",strong)
+        print("weak:",weak)
         dim_g = len(Omega)
         pair_of = self.build_pnof5_pair_array(Omega, norb)
         # Rotation NO
@@ -749,7 +754,9 @@ class NOFVQE:
         h_NO = jnp.einsum("ij,ip,jq->pq", h_MO, vecs, vecs, optimize=True)
         J_NO = jnp.einsum("ijkl,ip,jq,kq,lp->pq", I_MO, vecs, vecs, vecs, vecs, optimize=True)
         K_NO = jnp.einsum("ijkl,ip,jp,kq,lq->pq", I_MO, vecs, vecs, vecs, vecs, optimize=True)
-
+        print("h_NO:",h_NO)
+        print("J_NO:",J_NO)
+        print("K_NO:",K_NO)
         # --- Build CJ and CK (PNOF5) ---
         cj12 = 2.0 * jnp.outer(n, n)
         ck12 = jnp.outer(n, n)
@@ -786,15 +793,35 @@ class NOFVQE:
         
         Eg = 0.0
         E_pair = 0.0
-        for g in range(dim_g):
-            for p in Omega[g]:
-                Eg +=2.0 * n[p] * h_NO[p, p]
-            Eg += n[g]*J_NO[g, g]
-            for q in Omega[g][-dim_g:]:
-                Eg -= 2.0 *jnp.sqrt(n[g] * n[q]) * K_NO[q, g]
-            for l in Omega[g][-dim_g:]:
-                for m in Omega[g][-dim_g:]:
+
+        for g in range(norb):
+            Eg +=2.0 * n[g] * h_NO[g, g]  
+        for g0 in range(F): 
+            Eg += n[g0]*J_NO[g0, g0]
+
+
+        for g1 in Omega:
+            for q in g1[1:]:
+                Eg -= 2.0 *jnp.sqrt(n[g1[0]] * n[q]) * K_NO[q, g1[0]]
+            for l in g1[1:]:
+                for m in g1[1:]:
                     Eg += jnp.sqrt(n[m] * n[l]) * K_NO[l, m]
+                    
+        # for g0 in Omega:
+        #     for p in g0:
+        #         Eg +=2.0 * n[p] * h_NO[p, p]    
+        #     Eg += n[g0[0]]*J_NO[g0[0], g0[0]]
+
+
+        # for g1 in Omega:
+        #     for q in g1[1:]:
+        #         Eg -= 2.0 *jnp.sqrt(n[g1[0]] * n[q]) * K_NO[q, g1[0]]
+        #     for l in g1[1:]:
+        #         for m in g1[1:]:
+        #             Eg += jnp.sqrt(n[m] * n[l]) * K_NO[l, m]
+        
+
+        print("Edison_Eg:",Eg)
                     
         for j in range(dim_g):
             for k in range(dim_g):
@@ -802,6 +829,9 @@ class NOFVQE:
                     for r in Omega[j]:
                         for s in Omega[k]:
                             E_pair += n[s] * n[r] *(2*J_NO[r, s]-K_NO[r, s])  
+
+        print("Edison_E_pair:",E_pair)
+        print("Edison_E_nuc:",E_nuc)
     
         return E_nuc + Eg + E_pair, rdm1, n, vecs, cj12, ck12
 
@@ -985,7 +1015,7 @@ class NOFVQE:
         # -------------------------------------------------
         # STAGE 2 — θ + κ (orbital optimization)
         # -------------------------------------------------
-        self.optimize_kappa = True
+        self.optimize_kappa = False
 
         n_kappa = self.n_kappa  # you already define this
         kappa0 = np.zeros(n_kappa)
