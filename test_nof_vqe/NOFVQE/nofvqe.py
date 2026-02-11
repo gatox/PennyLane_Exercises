@@ -75,7 +75,8 @@ class NOFVQE:
     @staticmethod
     def _get_no_on(rdm1, norb, pair_doubles):
         if pair_doubles:
-            rdm1 = 0.5 * (rdm1 + rdm1.T)   # Hermitianize
+            #rdm1 = 0.5 * (rdm1 + rdm1.T)   # Hermitianize
+            print("RDM1:",rdm1)
             
             # occupation numbers are the diagonal
             n = jnp.diag(rdm1)
@@ -176,7 +177,10 @@ class NOFVQE:
             if self.pair_doubles:
                 self.init_param = init_param
             else:
-                self.E_nuc, self.h_MO, self.I_MO, self.n_elec, self.norb = self._mo_integrals(self.crd)
+                if self.gradient == "analytics":
+                    self.E_nuc, self.h_MO, self.J_MO, self.K_MO, self.n_elec, self.norb = self._mo_integrals(self.crd)
+                else:
+                    self.E_nuc, self.h_MO, self.I_MO, self.n_elec, self.norb = self._mo_integrals(self.crd)
                 self.init_param = self._initial_params(init_param)
 
     # ---------------- Selecting the functional ----------------
@@ -242,14 +246,62 @@ class NOFVQE:
         return ops
     
     # ---------------- Filter pair ansatz ----------------
-    def _filter_pair_doubles(self, doubles):
-        pair_doubles = []
-        for d in doubles:
-            i, j, a, b = d
-            if (j == i + 1) and (b == a + 1):
-                if (i % 2 == 0) and (a % 2 == 0):
-                    pair_doubles.append(d)
-        return pair_doubles
+    def _build_pnof5e_omega(self, norb, n_elec):
+        Omega_mo, strong, weak_g = self._build_pnof5e_omega_strong_weak(
+            norb, n_elec
+        )
+
+        Omega_spin = []
+
+        for omega in Omega_mo:
+            g = omega[0]          # strong orbital
+            weak_orbs = omega[1:] # weak orbitals in Ω_g
+
+            g_spin = [2*g, 2*g + 1]
+
+            for q in weak_orbs:
+                q_spin = [2*q, 2*q + 1]
+                Omega_spin.append(g_spin + q_spin)
+
+        return Omega_spin
+        
+
+    def _build_pnof5e_omega_strong_weak(self, norb, n_elec):
+        """
+        Deterministic Ω_g construction for PNOF5e
+        """
+        F = n_elec // 2
+        strong = list(range(F))
+        weak = list(range(F, norb))
+        omega_dim = (norb-F)//F
+        if omega_dim == 0:
+            omega_dim =1
+
+        Omega = []
+        weak_idx = 0
+
+        for g in list(range(omega_dim)):
+            if weak_idx >= len(weak):
+                break
+
+            wg = weak[weak_idx: weak_idx + F]
+    
+            weak_idx += len(wg)
+
+            Omega.append([F-g-1] + wg)
+        return Omega, strong, weak
+
+
+
+
+    # def _filter_pair_doubles(self, doubles):
+    #     pair_doubles = []
+    #     for d in doubles:
+    #         i, j, a, b = d
+    #         if (j == i + 1) and (b == a + 1):
+    #             if (i % 2 == 0) and (a % 2 == 0):
+    #                 pair_doubles.append(d)
+    #     return pair_doubles
     
     def _read_C_MO(self, C,S_ao,p):
         if self.C_AO_MO is None:
@@ -399,37 +451,61 @@ class NOFVQE:
         norb = int(h_MO.shape[0])
         return jnp.array(E_nuc), jnp.array(h_MO), jnp.array(I_MO), n_elec, norb
     
-    # ---------- integrals at a geometry (MO basis) from pynof ----------
+    # ---------- integrals at a geometry (MO basis) from pynof ----------    
     def _mo_integrals_pynof(self):
         mol_local = self.mol
         p = self.p
-        # Compute integrals with PyNOF (from AO to MO) for the nuclear gradient
+        # Compute integrals with PyNOF (from AO to MO)
         S_ao, _, _, self.H_ao, self.I_ao, self.b_mnl, _ = pynof.compute_integrals(p.wfn,mol_local,p)
         self.C_AO_MO = self._read_C_MO(self.C, S_ao,p)
+        J_MO,K_MO,h_MO = pynof.computeJKH_MO(self.C_AO_MO,self.H_ao,self.I_ao, self.b_mnl,p)
+        #h_MO,I_or_b_MO = pynof.JKH_MO_tmp(self.C_AO_MO,self.H_ao,self.I_ao,self.b_mnl,p)
+        # if self.p.RI:
+        #     b_MO = I_or_b_MO
+        #     I_MO = np.einsum("pql,rsl->prsq", b_MO, b_MO, optimize=True)
+        # else:
+        #     I_MO = np.transpose(I_or_b_MO, axes=(0,2,3,1))
+        norb = int(h_MO.shape[0])
+        E_nuc = mol_local.nuclear_repulsion_energy()
+        n_elec = p.ne
+        return jnp.array(E_nuc), jnp.array(h_MO), jnp.array(J_MO), jnp.array(K_MO), n_elec, norb
     
     def _mo_integrals(self, crd):
-        # if self.gradient == "analytics":
-        #     E_nuc, h_MO, I_MO, n_elec, norb = self._mo_integrals_pynof()
-        # else:
-        #     E_nuc, h_MO, I_MO, n_elec, norb = self._mo_integrals_pennylane(crd)
-        
-        self._mo_integrals_pynof()
-        E_nuc, h_MO, I_MO, n_elec, norb = self._mo_integrals_pennylane(crd)
+        if self.gradient == "analytics":
+            E_nuc, h_MO, J_MO, K_MO, n_elec, norb = self._mo_integrals_pynof()
             
-        self.singles, self.doubles = qml.qchem.excitations(n_elec, 2 * norb)
-        
-        if self.pair_doubles:
-            # Kill singles completely (seniority-zero ansatz)
-            self.singles = []
+            if self.pair_doubles:
+                # Kill singles completely (seniority-zero ansatz)
+                self.singles = []
 
-            # Keep only pair doubles
-            self.doubles = self._filter_pair_doubles(self.doubles)   
-        
-        print("Size Singles:",len(self.singles))
-        print("Singles:",self.singles)
-        print("Size Doubles:",len(self.doubles))
-        print("Doubles:",self.doubles)
-        return E_nuc, h_MO, I_MO, n_elec, norb
+                # Keep only pair doubles
+                self.doubles = self._build_pnof5e_omega(norb,n_elec)   
+            else:
+                self.singles, self.doubles = qml.qchem.excitations(n_elec, 2 * norb)
+
+            print("Size Singles:",len(self.singles))
+            print("Singles:",self.singles)
+            print("Size Doubles:",len(self.doubles))
+            print("Doubles:",self.doubles)
+            return E_nuc, h_MO, J_MO, K_MO, n_elec, norb
+
+        else:
+            E_nuc, h_MO, I_MO, n_elec, norb = self._mo_integrals_pennylane(crd)
+                
+            if self.pair_doubles:
+                # Kill singles completely (seniority-zero ansatz)
+                self.singles = []
+
+                # Keep only pair doubles
+                self.doubles = self._build_pnof5e_omega(norb,n_elec)   
+            else:
+                self.singles, self.doubles = qml.qchem.excitations(n_elec, 2 * norb)
+            
+            print("Size Singles:",len(self.singles))
+            print("Singles:",self.singles)
+            print("Size Doubles:",len(self.doubles))
+            print("Doubles:",self.doubles)
+            return E_nuc, h_MO, I_MO, n_elec, norb
 
     def _wrap_angles(self, p):
         p = np.asarray(p, dtype=float)
@@ -548,8 +624,10 @@ class NOFVQE:
     def ene_pnof4(self, params, rdm1=None):
         # Functions based on 1-RDM (J. Chem. Theory Comput. 2025, 21, 5, 2402–2413) and taked from the following repository:
         # https://github.com/felipelewyee/NOF-VQE
-        
-        E_nuc, h_MO, I_MO, n_elec, norb = self.E_nuc, self.h_MO, self.I_MO, self.n_elec, self.norb
+        if self.gradient == "analytics":
+           E_nuc, h_MO, J_MO, K_MO, n_elec, norb = self.E_nuc, self.h_MO, self.J_MO, self.K_MO, self.n_elec, self.norb 
+        else:
+            E_nuc, h_MO, I_MO, n_elec, norb = self.E_nuc, self.h_MO, self.I_MO, self.n_elec, self.norb
         # Fermi level
         F = int(n_elec / 2)
 
@@ -563,11 +641,17 @@ class NOFVQE:
 
         h = 1 - n
         S_F = jnp.sum(n[F:])
-
-        h_NO = jnp.einsum("ij,ip,jq->pq", h_MO, vecs, vecs, optimize=True)
-        J_NO = jnp.einsum("ijkl,ip,jq,kq,lp->pq", I_MO, vecs, vecs, vecs, vecs, optimize=True)
-        K_NO = jnp.einsum("ijkl,ip,jp,kq,lq->pq", I_MO, vecs, vecs, vecs, vecs, optimize=True)
-    
+        if self.gradient == "analytics":
+            breakpoint()
+            h_NO = jnp.einsum("ij,ip,jq->pq", h_MO, vecs, vecs, optimize=True)
+            J_NO = jnp.einsum("ij,ip,jq->pq", J_MO, vecs, vecs, optimize=True)
+            K_NO = jnp.einsum("ij,ip,jq->pq", K_MO, vecs, vecs, optimize=True)
+        else:
+            breakpoint()
+            h_NO = jnp.einsum("ij,ip,jq->pq", h_MO, vecs, vecs, optimize=True)
+            J_NO = jnp.einsum("ijkl,ip,jq,kq,lp->pq", I_MO, vecs, vecs, vecs, vecs, optimize=True)
+            K_NO = jnp.einsum("ijkl,ip,jp,kq,lq->pq", I_MO, vecs, vecs, vecs, vecs, optimize=True)
+        
     
         Delta = jnp.zeros((norb, norb))
         for p in range(norb):
@@ -1155,7 +1239,7 @@ if __name__ == "__main__":
         sys.exit(1)
 
     xyz_file = sys.argv[1]
-    functional="pnof5"
+    functional="pnof4"
     #functional="vqe"
     conv_tol=1e-7
     #init_param=0.1
@@ -1172,7 +1256,7 @@ if __name__ == "__main__":
     n_shots=10000
     optimization_level=3
     resilience_level=0
-    pair_double = True
+    pair_double = False
     cal = NOFVQE(
             xyz_file, 
             functional=functional, 
