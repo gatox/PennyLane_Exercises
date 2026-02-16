@@ -137,7 +137,6 @@ class NOFVQE:
         self.d_shift = d_shift 
         self.p = pynof.param(self.mol,self.basis)
         self.p.ipnof = self.ipnof
-        #self.p.ipnof = 5
         self.p.RI = True
         self.opt_param = None
         self.opt_rdm1 = None
@@ -248,7 +247,7 @@ class NOFVQE:
     
     # ---------------- Filter pair ansatz ----------------
     def _build_pnof5e_omega(self):
-        Omega_mo = self._build_pnof5e_omega_strong_weak()
+        Omega_mo = self._build_pnof5e_omega_mo()
 
         Omega_spin = []
         for omega in Omega_mo:
@@ -262,7 +261,7 @@ class NOFVQE:
                 Omega_spin.append(g_spin + q_spin)
         return Omega_spin
     
-    def _build_pnof5e_omega_strong_weak(self):
+    def _build_pnof5e_omega_mo(self):
         """
         Build Ω_g exactly as in PyNOF5 using ll / ul logic.
         Returns Ω in MO indices.
@@ -282,43 +281,6 @@ class NOFVQE:
                 Omega.append([ul-1]+[ul])
                 break
         return Omega
-        
-
-    # def _build_pnof5e_omega_strong_weak(self, norb, n_elec):
-    #     """
-    #     Deterministic Ω_g construction for PNOF5e
-    #     """
-    #     F = n_elec // 2
-    #     strong = list(range(F))
-    #     weak = list(range(F, norb))
-    #     omega_dim = (norb-F)//F
-    #     if omega_dim == 0:
-    #         omega_dim =1
-
-    #     Omega = []
-    #     weak_idx = 0
-    #     for g in list(range(omega_dim)):
-    #         if weak_idx >= len(weak):
-    #             break
-
-    #         wg = weak[weak_idx: weak_idx + F]
-    
-    #         weak_idx += len(wg)
-
-    #         Omega.append([F-g-1] + wg)
-    #     return Omega, strong, weak
-
-
-
-
-    # def _filter_pair_doubles(self, doubles):
-    #     pair_doubles = []
-    #     for d in doubles:
-    #         i, j, a, b = d
-    #         if (j == i + 1) and (b == a + 1):
-    #             if (i % 2 == 0) and (a % 2 == 0):
-    #                 pair_doubles.append(d)
-    #     return pair_doubles
     
     def _read_C_MO(self, C,S_ao,p):
         # C is in NO basis
@@ -730,17 +692,12 @@ class NOFVQE:
             n1 = np.asarray(n)
             cj12,ck12 = pynof.PNOFi_selector(n1,self.p)
             
-            #E_1r,elag,sumdiff,maxdiff = pynof.ENERGY1r(vecs,n1,self.H_ao, self.I_ao, self.b_mnl,cj12,ck12,self.p)
-
             E_otra = pynof.calce(n1,cj12,ck12,J_MO,K_MO,h_MO,self.p)
             E_tot = E_nuc+E_otra
-            #E_tot_2 = E_nuc+E_1r
-            print("Energy pynof:",
-                  E_tot, 
-                  #E_tot_2
-                  )
-            #breakpoint()
             
+            print("Energy pynof:",
+                  E_tot
+                  )
         else:
             print("Pennylane")
             h_NO = jnp.einsum("ij,ip,jq->pq", h_MO, vecs, vecs, optimize=True)
@@ -775,28 +732,30 @@ class NOFVQE:
                         val = jnp.sqrt(jnp.abs(n[q] * n[p]))
                     Pi = Pi.at[q, p].set(val)
         
-            E1 = 0
-            for p in range(norb):
-                E1 += 2 * n[p] * h_NO[p, p]
-            for p in range(norb):
-                E1 += n[p] * J_NO[p, p]
+            # E1 = 0
+            # for p in range(norb):
+            #     E1 += 2 * n[p] * h_NO[p, p]
+            # for p in range(norb):
+            #     E1 += n[p] * J_NO[p, p]
         
-            E2 = 0
-            for p in range(norb):
-                for q in range(norb):
-                    if p != q:
-                        E2 += (n[q] * n[p] - Delta[q, p]) * (2 * J_NO[p, q] - K_NO[p, q])
-                        E2 += Pi[q, p] * (K_NO[p, q])
+            # E2 = 0
+            # for p in range(norb):
+            #     for q in range(norb):
+            #         if p != q:
+            #             E2 += (n[q] * n[p] - Delta[q, p]) * (2 * J_NO[p, q] - K_NO[p, q])
+            #             E2 += Pi[q, p] * (K_NO[p, q])
+            # E_tot = E_nuc + E1 + E2
+            # print("Energy pennylane:",E_tot)
             
             #NEW: Compute cj12 and ck12 (like pynof.CJCKD4)
             n_outer = jnp.outer(n, n)
             cj12 = 2.0 * (n_outer - Delta)
             ck12 = n_outer - Delta - Pi
-            E_tot = E_nuc + E1 + E2
-            print("Energy pennylane:",E_tot)
+            
+            E = self._calce(n,cj12,ck12,J_NO,K_NO,h_NO)
             #breakpoint()
 
-        return E_tot, rdm1, n, vecs, cj12, ck12
+        return E_nuc + E, rdm1, n, vecs, cj12, ck12
     
     def ene_pnof5(self, params, rdm1=None):
 
@@ -1411,7 +1370,14 @@ if __name__ == "__main__":
     n_shots=10000
     optimization_level=3
     resilience_level=0
-    pair_double = True
+    arg = sys.argv[4].lower()
+    if arg == "true":
+        pair_double = True
+    elif arg == "false":
+        pair_double = False
+    else:
+        raise ValueError("pair_double must be True or False")
+    #pair_double = False
     cal = NOFVQE(
             xyz_file, 
             functional=functional, 
@@ -1434,17 +1400,17 @@ if __name__ == "__main__":
         E_min, params_opt, rdm1_opt, n, vecs, cj12, ck12 = cal.run_scnofvqe()
         print("Min Ene VQE and param:", E_min, params_opt)
         # Nuclear gradient
-        # grad = cal.grad()
-        # print(f"Nuclear gradient ({gradient}):\n", grad)
-        # print(f"Nuclear gradient norm:\n", np.linalg.norm(grad))
+        grad = cal.grad()
+        print(f"Nuclear gradient ({gradient}):\n", grad)
+        print(f"Nuclear gradient norm:\n", np.linalg.norm(grad))
         
     else:
         E_min, params_opt, rdm1_opt, n, vecs, cj12, ck12 = cal.ene_vqe()
         print("Min Ene VQE and param:", E_min, params_opt)
         # Nuclear gradient
-        grad = cal.grad()
-        print(f"Nuclear gradient ({gradient}):\n", grad)
-        print(f"Nuclear gradient norm:\n", np.linalg.norm(grad))
+        # grad = cal.grad()
+        # print(f"Nuclear gradient ({gradient}):\n", grad)
+        # print(f"Nuclear gradient norm:\n", np.linalg.norm(grad))
         
     # Run VQE
     # E_h, params_h, rdm1_h, n_h, vecs_h, cj12_h, ck12_h=cal._vqe(cal.ene_pnof4, init_param, crds, method="adam")
