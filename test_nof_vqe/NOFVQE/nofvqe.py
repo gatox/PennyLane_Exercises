@@ -247,13 +247,10 @@ class NOFVQE:
         return ops
     
     # ---------------- Filter pair ansatz ----------------
-    def _build_pnof5e_omega(self, norb, n_elec):
-        Omega_mo, strong, weak_g = self._build_pnof5e_omega_strong_weak(
-            norb, n_elec
-        )
+    def _build_pnof5e_omega(self):
+        Omega_mo = self._build_pnof5e_omega_strong_weak()
 
         Omega_spin = []
-
         for omega in Omega_mo:
             g = omega[0]          # strong orbital
             weak_orbs = omega[1:] # weak orbitals in Ω_g
@@ -263,33 +260,53 @@ class NOFVQE:
             for q in weak_orbs:
                 q_spin = [2*q, 2*q + 1]
                 Omega_spin.append(g_spin + q_spin)
-
         return Omega_spin
+    
+    def _build_pnof5e_omega_strong_weak(self):
+        """
+        Build Ω_g exactly as in PyNOF5 using ll / ul logic.
+        Returns Ω in MO indices.
+        """
+        Omega = []
+
+        for l in range(self.ndoc):
+            g = self.no1 + l
+
+            ll = self.no1 + self.ndns + (self.ndoc - l - 1) * self.ncwo
+            ul = ll + self.ncwo
+
+            if ul > ll:
+                weak = list(range(ll, ul))
+                Omega.append([g] + weak)
+            elif ul == ll:
+                Omega.append([ul-1]+[ul])
+                break
+        return Omega
         
 
-    def _build_pnof5e_omega_strong_weak(self, norb, n_elec):
-        """
-        Deterministic Ω_g construction for PNOF5e
-        """
-        F = n_elec // 2
-        strong = list(range(F))
-        weak = list(range(F, norb))
-        omega_dim = (norb-F)//F
-        if omega_dim == 0:
-            omega_dim =1
+    # def _build_pnof5e_omega_strong_weak(self, norb, n_elec):
+    #     """
+    #     Deterministic Ω_g construction for PNOF5e
+    #     """
+    #     F = n_elec // 2
+    #     strong = list(range(F))
+    #     weak = list(range(F, norb))
+    #     omega_dim = (norb-F)//F
+    #     if omega_dim == 0:
+    #         omega_dim =1
 
-        Omega = []
-        weak_idx = 0
-        for g in list(range(omega_dim)):
-            if weak_idx >= len(weak):
-                break
+    #     Omega = []
+    #     weak_idx = 0
+    #     for g in list(range(omega_dim)):
+    #         if weak_idx >= len(weak):
+    #             break
 
-            wg = weak[weak_idx: weak_idx + F]
+    #         wg = weak[weak_idx: weak_idx + F]
     
-            weak_idx += len(wg)
+    #         weak_idx += len(wg)
 
-            Omega.append([F-g-1] + wg)
-        return Omega, strong, weak
+    #         Omega.append([F-g-1] + wg)
+    #     return Omega, strong, weak
 
 
 
@@ -557,7 +574,7 @@ class NOFVQE:
                 self.singles = []
 
                 # Keep only pair doubles
-                self.doubles = self._build_pnof5e_omega(norb,n_elec)   
+                self.doubles = self._build_pnof5e_omega()   
             else:
                 self.singles, self.doubles = qml.qchem.excitations(n_elec, 2 * norb)
             
