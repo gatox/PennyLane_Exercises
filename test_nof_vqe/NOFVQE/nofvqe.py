@@ -387,7 +387,7 @@ class NOFVQE:
         y = np.zeros((self.nvar))
         E = self._calcorbe_pennylane(y, n,cj12,ck12,C,h_MO, I_MO)
         
-        alpha = self.alpha
+        alpha = self.nalpha
         beta1 = 0.7
         beta2 = 0.999
 
@@ -427,7 +427,7 @@ class NOFVQE:
                 improved = True
 
         if not improved:
-            self.alpha = self.alpha/10
+            self.nalpha = self.nalpha/10
             self.maxloop = self.maxloop + 30
             #print("      alpha ",p.alpha)
 
@@ -467,10 +467,10 @@ class NOFVQE:
         Self-consistent NOF-VQE loop:
         VQE amplitudes <-> orbital optimization
         """
-        gamma = None
         E_old = None
         n_old = None
         E_orb_old = None
+        C_MO = None
         init_param = self.init_param
         
         # # 1. Build integrals with current orbitals
@@ -493,7 +493,7 @@ class NOFVQE:
             if self.gradient == "analytics":
                 self.E_nuc, self.h_MO, self.J_MO, self.K_MO, self.n_elec, self.norb = self._mo_integrals(self.crd)
             else:
-                self.E_nuc, self.h_MO, self.I_MO, self.n_elec, self.norb = self._mo_integrals(self.crd)
+                self.E_nuc, self.h_MO, self.I_MO, self.n_elec, self.norb = self._mo_integrals(self.crd, C_MO=C_MO)
         
             self.init_param = self._initial_params(init_param)
 
@@ -502,22 +502,11 @@ class NOFVQE:
             print("Updating initial parameters with optimal parameters",params)
             init_param = params
             print(f"VQE energy: {E:.10f} Ha")
-
-            # # 3. Convergence check (NEW)
-            # if n_old is not None:
-            #     dn = np.linalg.norm(n - n_old)
-            #     print(f"NO diff = {dn:.3e}")
-            #     if abs(E - E_old) < tol and dn < tol:
-            #         print("SC-NOFVQE converged (occupations)")
-            #         break
-            
-            # E_old = E
-            # n_old = n
             
             # 4. Orbital optimization
-            E_orb = self._orbital_optimization(n, cj12,ck12, vecs, self.h_MO, self.I_MO)
+            E_orb, C_new = self._orbital_optimization(n, cj12,ck12, vecs, self.h_MO, self.I_MO)
             print(f"Orbital optimization energy: {E_orb:.10f} Ha")
-
+            
             # Convergence check (VQE and Orbital energy)
             if E_orb_old is not None:
                 if abs(E - E_old) < 1e-6 and abs(E_orb - E_orb_old) < 1e-6:
@@ -525,8 +514,8 @@ class NOFVQE:
                     print("SC-NOFVQE converged (occupations)")
                     break
             E_old = E
-            #n_old = n
             E_orb_old = E_orb
+            C_MO = C_new
 
         self.init_param = init_param
         return E, params, rdm1, n, vecs, cj12, ck12
@@ -597,7 +586,7 @@ class NOFVQE:
         n_elec = p.ne
         return jnp.array(E_nuc), jnp.array(h_MO), jnp.array(J_MO), jnp.array(K_MO), n_elec, norb
     
-    def _mo_integrals(self, crd):
+    def _mo_integrals(self, crd, C_MO=None):
         if self.gradient == "analytics":
             E_nuc, h_MO, J_MO, K_MO, n_elec, norb = self._mo_integrals_pynof()
             
@@ -618,6 +607,13 @@ class NOFVQE:
 
         else:
             E_nuc, h_MO, I_MO, n_elec, norb = self._mo_integrals_pennylane(crd)
+            
+            if C_MO is not None:
+                print("C_MO guest")
+                h_MO = np.einsum("mi,mn,nj->ij",C_MO,h_MO,C_MO,optimize=True)
+                I_MO = np.einsum("mp,nq,mnsl,sr,lt->pqrt",C_MO,C_MO,I_MO,C_MO,C_MO,optimize=True)
+            else:
+                print("C_MO is None")
                 
             if self.pair_doubles:
                 # Kill singles completely (seniority-zero ansatz)
