@@ -1400,9 +1400,9 @@ if __name__ == "__main__":
         E_min, params_opt, rdm1_opt, n, vecs, cj12, ck12 = cal.run_scnofvqe()
         print("Min Ene VQE and param:", E_min, params_opt)
         # Nuclear gradient
-        grad = cal.grad()
-        print(f"Nuclear gradient ({gradient}):\n", grad)
-        print(f"Nuclear gradient norm:\n", np.linalg.norm(grad))
+        # grad = cal.grad()
+        # print(f"Nuclear gradient ({gradient}):\n", grad)
+        # print(f"Nuclear gradient norm:\n", np.linalg.norm(grad))
         
     else:
         E_min, params_opt, rdm1_opt, n, vecs, cj12, ck12 = cal.ene_vqe()
