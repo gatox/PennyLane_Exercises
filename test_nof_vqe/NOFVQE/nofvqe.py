@@ -2,6 +2,7 @@ import time
 import pennylane as qml
 from pennylane import numpy as pnp
 import numpy as np
+from numba import njit
 
 
 from pennylane import FermiC, FermiA
@@ -14,7 +15,7 @@ import optax
 import psi4
 psi4.core.be_quiet()
 import pynof
-from scipy.linalg import eigh
+from scipy.linalg import eigh, expm
 from scipy.optimize import minimize
 import re
 import os
@@ -149,6 +150,7 @@ class NOFVQE:
         self.I_ao = None 
         self.b_mnl = None
         self.C = None
+        self.maxloop = 30
         self.energy_scale = 1e3  # mHa
         self.icall = 0
         self.pair_doubles = pair_double
@@ -304,53 +306,142 @@ class NOFVQE:
         C_old = pynof.check_ortho(C_old,S_ao,p)
         return C_old
     
-    def _n_to_gamma_softmax(self, n):
-        """
-        Convert measured occupation numbers n_p into
-        gamma parameters for PyNOF (Softmax scheme).
-        """
-        assert n.ndim == 1, f"Expected occupation vector, got shape {n.shape}"
+    def _calcorbg_pennylane(self, y,n,cj12,ck12,C,H_MO,I_MO):
 
-        p = self.p
+        Cnew = self._rotate_orbital_pennylane(y,C)
 
-        # Convert ONCE to NumPy (safe: no gradients, no JIT)
-        n_np = np.asarray(n, dtype=float)
+        elag,_ = self._computeLagrange2_pennylane(n,cj12,ck12,Cnew,H_MO,I_MO)
 
-        # Build reordered occupation vector expected by PyNOF
-        n_reordered = np.copy(n_np)
-        
-        for i in range(p.ndoc):
-            for j in range(p.ncwo):
-                k = p.no1 + p.ndns + (p.ndoc - i - 1) * p.ncwo + j
-                l = p.no1 + p.ndns + (p.ndoc - i - 1) + j*p.ndoc
-                n_reordered[k] = n_np[l]
-        p.nv = p.nbf5 - p.no1 - p.nsoc 
+        grad = 4*(elag - elag.T)
 
-        assert np.all(n_reordered >= -1e-8)
-        assert np.all(n_reordered <= 2.0 + 1e-8)
+        grads = np.zeros((self.nvar))
 
-        # Map n -> gamma (PyNOF expects NumPy)  
-        gamma = pynof.n_to_gammas_softmax(
-            n_reordered,
-            p.no1,
-            p.ndoc,
-            p.ndns,
-            p.ncwo
-        )
-        return gamma
+        k = 0
+        for i in range(self.nbf5):
+            for j in range(i+1,self.nbf):
+                grads[k] = grad[i,j]
+                k += 1
+        grad = grads
+
+        return grad
     
-    def _orbital_optimization(self, n):
+    def _computeLagrange2_pennylane(self,n,cj12,ck12,C,H_MO,I_MO):
+        Hmat = np.einsum("mi,mn,nj->ij",C,H_MO,C[:,:self.nbf5],optimize=True)
+        I_MO = np.einsum("mp,nq,mnsl,sr,lt->pqrt",C,C[:,:self.nbf5],I_MO,C[:,:self.nbf5],C[:,:self.nbf5],optimize=True)
+
+        cj12 = cj12 - jnp.diag(jnp.diag(cj12)) # Remove diag.
+        ck12 = ck12 - jnp.diag(jnp.diag(ck12)) # Remove diag.
+        
+        elag = np.zeros((self.nbf,self.nbf))
+        if(self.MSpin==0):
+            # 2ndH/dy_ab
+            elag[:,:self.nbf5] +=  np.einsum('b,ab->ab',n,Hmat[:,:self.nbf5],optimize=True)
+
+            # dJ_pp/dy_ab
+            elag[:,:self.nbeta] +=  np.einsum('b,abbb->ab',n[:self.nbeta],I_MO[:,:self.nbeta,:self.nbeta,:self.nbeta],optimize=True)
+            elag[:,self.nalpha:self.nbf5] +=  np.einsum('b,abbb->ab',n[self.nalpha:self.nbf5],I_MO[:,self.nalpha:self.nbf5,self.nalpha:self.nbf5,self.nalpha:self.nbf5],optimize=True)
+
+            # C^J_pq dJ_pq/dy_ab 
+            elag[:,:self.nbf5] +=  np.einsum('bq,abqq->ab',cj12,I_MO[:,:self.nbf5,:self.nbf5,:self.nbf5],optimize=True)
+
+            # -C^K_pq dK_pq/dy_ab 
+            elag[:,:self.nbf5] += -np.einsum('bq,aqbq->ab',ck12,I_MO[:,:self.nbf5,:self.nbf5,:self.nbf5],optimize=True)
+        else:
+            print("MSpin must be zero")
+        return elag,Hmat
+    
+    def _rotate_orbital_pennylane(self, y,C):
+        ynew = np.zeros((self.nbf,self.nbf))
+
+        n = 0
+        for i in range(self.nbf5):
+            for j in range(i+1,self.nbf):
+                ynew[i,j] =  y[n]
+                ynew[j,i] = -y[n]
+                n += 1
+
+        U = expm(ynew)
+
+        Cnew = jnp.einsum("mr,rp->mp",C,U,optimize=True)
+
+        return Cnew
+        
+    
+    def _computeJKH_MO_to_NO_pennylane(self, vecs, h_MO, I_MO):
+        h_NO = jnp.einsum("ij,ip,jq->pq", h_MO, vecs, vecs, optimize=True)
+        J_NO = jnp.einsum("ijkl,ip,jq,kq,lp->pq", I_MO, vecs, vecs, vecs, vecs, optimize=True)
+        K_NO = jnp.einsum("ijkl,ip,jp,kq,lq->pq", I_MO, vecs, vecs, vecs, vecs, optimize=True)
+        return h_NO, J_NO, K_NO
+    
+    def _calcorbe_pennylane(self, y,n,cj12,ck12,C, h_MO, I_MO):
+
+        Cnew = self._rotate_orbital_pennylane(y,C)
+
+        h_NO, J_NO, K_NO = self._computeJKH_MO_to_NO_pennylane(Cnew, h_MO, I_MO)
+
+        E = self._calce(n,cj12,ck12,J_NO,K_NO,h_NO)
+
+        return E
+    
+    def _orbopt_adam_mod(self,n, cj12,ck12, C, h_MO, I_MO):
+        y = np.zeros((self.nvar))
+        E = self._calcorbe_pennylane(y, n,cj12,ck12,C,h_MO, I_MO)
+        
+        alpha = self.alpha
+        beta1 = 0.7
+        beta2 = 0.999
+
+        y = np.zeros((self.nvar))
+
+        m = 0.0 * y
+        v = 0.0 * y
+        vhat_max = 0.0 * y
+
+        improved = False
+        success = False
+        best_E, best_C = E, C
+        nit = 0
+        
+        for i in range(self.maxloop):
+            nit += 1
+
+            grad = self._calcorbg_pennylane(y*0, n,cj12,ck12, C, h_MO, I_MO)
+
+            if np.linalg.norm(grad) < 10**-4 and improved:
+                success = True
+                break
+
+            m = beta1 * m + (1 - beta1) * grad
+            v = beta2 * v + (1 - beta2) * (grad**2)
+            mhat = m / (1.0 - beta1**(i+1))
+            vhat = v / (1.0 - beta2**(i+1))
+            vhat_max = np.maximum(vhat_max, vhat)
+            y = - alpha * mhat / (np.sqrt(vhat_max + 10**-8)) #AMSgrad
+            C = self._rotate_orbital_pennylane(y,C)
+            
+            E = self._calcorbe_pennylane(y*0, n,cj12,ck12,C,h_MO, I_MO)
+            #print(i," ",E," ", E < best_E)
+            if E < best_E:
+                best_C = C
+                best_E = E
+                improved = True
+
+        if not improved:
+            self.alpha = self.alpha/10
+            self.maxloop = self.maxloop + 30
+            #print("      alpha ",p.alpha)
+
+        return best_E,best_C,nit,success
+        
+    
+    def _orbital_optimization(self, n, cj12,ck12, C, H_MO, I_MO):
         """
         Perform classical orbital optimization using PyNOF.
+        H_MO and I_MO
         """
-        p = self.p
-        C = self.C_AO_MO
-        H = self.H_ao
-        I = self.I_ao
-        b_mnl = self.b_mnl
         print("Printing MO old:",C)
-        E_orb, C_new, nit, success = pynof.orbopt_adam_mod(
-            n, C, H, I, b_mnl, p
+        E_orb, C_new, nit, success = self._orbopt_adam_mod(
+            n, cj12,ck12, C, H_MO, I_MO
         )
         
         print("Printing MO new:",C_new)
@@ -360,16 +451,16 @@ class NOFVQE:
         # Save updated orbitals
         self.C_AO_MO = C_new
         
-        C_1 = np.copy(C_new)
-        for i in range(p.ndoc):
-            for j in range(p.ncwo):
-                k = p.no1 + p.ndns + (p.ndoc - i - 1) * p.ncwo + j
-                l = p.no1 + p.ndns + (p.ndoc - i - 1) + j*p.ndoc
-                C_1[:,l] = C_new[:,k]
-        np.save(p.title + "_C.npy", C_1)
-        print(f"saving {p.title}C.npy")
+        # C_1 = np.copy(C_new)
+        # for i in range(p.ndoc):
+        #     for j in range(p.ncwo):
+        #         k = p.no1 + p.ndns + (p.ndoc - i - 1) * p.ncwo + j
+        #         l = p.no1 + p.ndns + (p.ndoc - i - 1) + j*p.ndoc
+        #         C_1[:,l] = C_new[:,k]
+        # np.save(p.title + "_C.npy", C_1)
+        # print(f"saving {p.title}C.npy")
 
-        return E_orb
+        return E_orb, C_new
 
     def run_scnofvqe(self, max_outer=10, tol=1e-6):
         """
@@ -382,63 +473,60 @@ class NOFVQE:
         E_orb_old = None
         init_param = self.init_param
         
-        # 1. Build integrals with current orbitals
-        if self.gradient == "analytics":
-            self.E_nuc, self.h_MO, self.J_MO, self.K_MO, self.n_elec, self.norb = self._mo_integrals(self.crd)
-        else:
-            self.E_nuc, self.h_MO, self.I_MO, self.n_elec, self.norb = self._mo_integrals(self.crd)
+        # # 1. Build integrals with current orbitals
+        # if self.gradient == "analytics":
+        #     self.E_nuc, self.h_MO, self.J_MO, self.K_MO, self.n_elec, self.norb = self._mo_integrals(self.crd)
+        # else:
+        #     self.E_nuc, self.h_MO, self.I_MO, self.n_elec, self.norb = self._mo_integrals(self.crd)
     
-        self.init_param = self._initial_params(init_param)
+        # self.init_param = self._initial_params(init_param)
 
-        # 2. Run VQE (pair-only)
-        E, params, rdm1, n, vecs, cj12, ck12 = self.ene_vqe()
-        print("Updating initial parameters with optimal parameters",params)
-        init_param = params
-        print(f"VQE energy: {E:.10f} Ha")
-        # for it in range(max_outer):
-        #     print(f"\n==== SC-NOFVQE Iteration {it} ====")
+        # # 2. Run VQE (pair-only)
+        # E, params, rdm1, n, vecs, cj12, ck12 = self.ene_vqe()
+        # print("Updating initial parameters with optimal parameters",params)
+        # init_param = params
+        # print(f"VQE energy: {E:.10f} Ha")
+        for it in range(max_outer):
+            print(f"\n==== SC-NOFVQE Iteration {it} ====")
 
-        #     # 1. Build integrals with current orbitals
-        #     if self.gradient == "analytics":
-        #         self.E_nuc, self.h_MO, self.J_MO, self.K_MO, self.n_elec, self.norb = self._mo_integrals(self.crd)
-        #     else:
-        #         self.E_nuc, self.h_MO, self.I_MO, self.n_elec, self.norb = self._mo_integrals(self.crd)
+            # 1. Build integrals with current orbitals
+            if self.gradient == "analytics":
+                self.E_nuc, self.h_MO, self.J_MO, self.K_MO, self.n_elec, self.norb = self._mo_integrals(self.crd)
+            else:
+                self.E_nuc, self.h_MO, self.I_MO, self.n_elec, self.norb = self._mo_integrals(self.crd)
         
-        #     self.init_param = self._initial_params(init_param)
+            self.init_param = self._initial_params(init_param)
 
-        #     # 2. Run VQE (pair-only)
-        #     E, params, rdm1, n, vecs, cj12, ck12 = self.ene_vqe()
-        #     print("Updating initial parameters with optimal parameters",params)
-        #     init_param = params
-        #     print(f"VQE energy: {E:.10f} Ha")
+            # 2. Run VQE (pair-only)
+            E, params, rdm1, n, vecs, cj12, ck12 = self.ene_vqe()
+            print("Updating initial parameters with optimal parameters",params)
+            init_param = params
+            print(f"VQE energy: {E:.10f} Ha")
 
-        #     # # 3. Convergence check (NEW)
-        #     # if n_old is not None:
-        #     #     dn = np.linalg.norm(n - n_old)
-        #     #     print(f"NO diff = {dn:.3e}")
-        #     #     if abs(E - E_old) < tol and dn < tol:
-        #     #         print("SC-NOFVQE converged (occupations)")
-        #     #         break
+            # # 3. Convergence check (NEW)
+            # if n_old is not None:
+            #     dn = np.linalg.norm(n - n_old)
+            #     print(f"NO diff = {dn:.3e}")
+            #     if abs(E - E_old) < tol and dn < tol:
+            #         print("SC-NOFVQE converged (occupations)")
+            #         break
             
-        #     # E_old = E
-        #     # n_old = n
+            # E_old = E
+            # n_old = n
+            
+            # 4. Orbital optimization
+            E_orb = self._orbital_optimization(n, cj12,ck12, vecs, self.h_MO, self.I_MO)
+            print(f"Orbital optimization energy: {E_orb:.10f} Ha")
 
-        #     # 4. Convert occupations -> gamma
-        #     gamma = self._n_to_gamma_softmax(n)
-
-        #     # 5. Orbital optimization
-        #     E_orb = self._orbital_optimization(gamma)
-        #     print(f"Orbital optimization energy: {E_orb:.10f} Ha")
-
-        #     # Convergence check (VQE and Orbital energy)
-        #     if E_orb_old is not None:
-        #         if abs(E - E_old) < 1e-6 and abs(E_orb - E_orb_old) < 1e-6:
-        #         #if abs(E_orb - E_orb_old) < 1e-4:
-        #             print("SC-NOFVQE converged (occupations)")
-        #             break
-        #     E_old = E
-        #     #n_old = n
-        #     E_orb_old = E_orb
+            # Convergence check (VQE and Orbital energy)
+            if E_orb_old is not None:
+                if abs(E - E_old) < 1e-6 and abs(E_orb - E_orb_old) < 1e-6:
+                #if abs(E_orb - E_orb_old) < 1e-4:
+                    print("SC-NOFVQE converged (occupations)")
+                    break
+            E_old = E
+            #n_old = n
+            E_orb_old = E_orb
 
         self.init_param = init_param
         return E, params, rdm1, n, vecs, cj12, ck12
