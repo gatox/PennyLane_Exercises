@@ -71,33 +71,84 @@ class NOFVQE:
 
         return units, charge, multiplicity, symbols, geometry, mol
 
-    @staticmethod
-    def _get_no_on(rdm1, norb, pair_doubles):
-        if pair_doubles:
-            #rdm1 = 0.5 * (rdm1 + rdm1.T)   # Hermitianize
-            print("RDM1:",rdm1)
+    # @staticmethod
+    # def _get_no_on(rdm1, norb, pair_doubles):
+    #     if pair_doubles:
+    #         #rdm1 = 0.5 * (rdm1 + rdm1.T)   # Hermitianize
+    #         print("RDM1:",rdm1)
             
-            # occupation numbers are the diagonal
-            n = jnp.diag(rdm1)
+    #         # occupation numbers are the diagonal
+    #         n = jnp.diag(rdm1)
             
-            # natural orbitals are already the basis
-            vecs = jnp.eye(norb)
-        else:
-            rdm1_aa = jnp.zeros((norb, norb))
+    #         # natural orbitals are already the basis
+    #         vecs = jnp.eye(norb)
+    #     else:
+    #         rdm1_aa = jnp.zeros((norb, norb))
         
+    #         i = -1
+    #         for p in range(0, norb):
+    #             for q in range(p, norb):
+    #                 i = i + 1
+    #                 val = jnp.squeeze(rdm1[i])
+    #                 rdm1_aa = rdm1_aa.at[p, q].set(val)
+    #                 rdm1_aa = rdm1_aa.at[q, p].set(val)
+        
+    #         n, vecs = jnp.linalg.eigh(rdm1_aa)
+        
+    #         n = n[::-1]
+    #         vecs = vecs[:, ::-1]
+    #     return n, vecs
+    
+    @staticmethod
+    def _get_no_on(rdm1, norb, pair_doubles, tol=1e-8):
+
+        if pair_doubles:
+            # Ensure Hermiticity (cheap + safe)
+            rdm1 = 0.5 * (rdm1 + rdm1.T)
+
+            # Check if RDM1 is already diagonal
+            offdiag_norm = jnp.linalg.norm(
+                rdm1 - jnp.diag(jnp.diag(rdm1))
+            )
+
+            if offdiag_norm < tol:
+                # Ideal seniority-zero case
+                n = jnp.diag(rdm1)
+                vecs = jnp.eye(norb)
+
+            else:
+                # Noise / leakage case: diagonalize
+                n_raw, vecs_raw = jnp.linalg.eigh(rdm1)
+
+                # Sort occupations descending
+                idx = jnp.argsort(n_raw)[::-1]
+                n = n_raw[idx]
+                vecs = vecs_raw[:, idx]
+
+                # (Optional but recommended)
+                # Enforce electron count conservation
+                ne_pairs = jnp.trace(rdm1)
+                n = n * (ne_pairs / jnp.sum(n))
+
+            return n, vecs
+
+        else:
+            # ---- general (non-pair) case: unchanged ----
+            rdm1_aa = jnp.zeros((norb, norb))
             i = -1
-            for p in range(0, norb):
+            for p in range(norb):
                 for q in range(p, norb):
-                    i = i + 1
+                    i += 1
                     val = jnp.squeeze(rdm1[i])
                     rdm1_aa = rdm1_aa.at[p, q].set(val)
                     rdm1_aa = rdm1_aa.at[q, p].set(val)
-        
+
             n, vecs = jnp.linalg.eigh(rdm1_aa)
-        
+
             n = n[::-1]
             vecs = vecs[:, ::-1]
-        return n, vecs
+
+            return n, vecs
         
     
     @staticmethod
@@ -364,7 +415,6 @@ class NOFVQE:
         Cnew = jnp.einsum("mr,rp->mp",C,U,optimize=True)
 
         return Cnew
-        
     
     def _computeJKH_MO_to_NO_pennylane(self, vecs, h_MO, I_MO):
         h_NO = jnp.einsum("ij,ip,jq->pq", h_MO, vecs, vecs, optimize=True)
@@ -452,42 +502,49 @@ class NOFVQE:
 
         return E_orb, C_new
 
-    def run_scnofvqe(self, max_outer=1, tol=1e-6):
+    def run_scnofvqe(self, max_outer=30, tol=1e-6):
         """
         Self-consistent NOF-VQE loop:
         VQE amplitudes <-> orbital optimization
         """
         E_old = None
-        n_old = None
         E_orb_old = None
-        C_MO = None
+
+        # Initial orbitals
+        C_MO = self.C_AO_MO if self.C_AO_MO is not None else None
         init_param = self.init_param
         
         for it in range(max_outer):
             print(f"\n==== SC-NOFVQE Iteration {it} ====")
 
-            # 1. Build integrals with current orbitals
+            # 1. Build integrals with scf current orbitals
             if self.gradient == "analytics":
                 self.E_nuc, self.h_MO, self.J_MO, self.K_MO, self.n_elec, self.norb = self._mo_integrals(self.crd)
             else:
-                self.E_nuc, self.h_MO, self.I_MO, self.n_elec, self.norb = self._mo_integrals(self.crd, C_MO=C_MO)
+                self.E_nuc, self.h_MO, self.I_MO, self.n_elec, self.norb, self.C_MO = self._mo_integrals(self.crd, C_MO=C_MO)
         
             self.init_param = self._initial_params(init_param)
 
             # 2. Run VQE (pair-only)
             E, params, rdm1, n, vecs, cj12, ck12 = self.ene_vqe()
+            
+            # 3. Pre-rotate orbitals if needed
+            if (vecs == np.eye(vecs.shape[0])).all():
+                C_start = self.C_MO
+            else:
+                C_start = vecs
+            
             print("Updating initial parameters with optimal parameters",params)
             init_param = params
             print(f"VQE energy: {E:.10f} Ha")
             
             # 4. Orbital optimization
-            E_orb, C_new = self._orbital_optimization(n, cj12,ck12, self.C_AO_MO, self.h_MO, self.I_MO)
+            E_orb, C_new = self._orbital_optimization(n, cj12,ck12, C_start, self.h_MO, self.I_MO)
             print(f"Orbital optimization energy: {E_orb:.10f} Ha")
             
             # Convergence check (VQE and Orbital energy)
             if E_orb_old is not None:
                 if abs(E - E_old) < 1e-6 and abs(E_orb - E_orb_old) < 1e-6:
-                #if abs(E_orb - E_orb_old) < 1e-4:
                     print("SC-NOFVQE converged (occupations)")
                     break
             E_old = E
@@ -500,7 +557,7 @@ class NOFVQE:
 
     
     # ---------- integrals at a geometry (MO basis) from pennylane ----------
-    def _mo_integrals_pennylane(self, crd):
+    def _mo_integrals_pennylane(self, crd, C_MO):
         """Return (E_nuc, h_MO, I_MO, n_electrons, norb) at given geometry (bohr)."""
         mol = qml.qchem.Molecule(symbols = self.symbols, 
                                  coordinates = crd, 
@@ -508,15 +565,31 @@ class NOFVQE:
                                  mult = self.mul, 
                                  basis_name = self.basis, 
                                  unit = self.units)
-        if self.initial_C_guess:
-            print("C_MO from scf pennylane as initial guess True")
-            _, self.coeffs, _, _, _ = qml.qchem.scf(mol)()
-            self.initial_C_guess = False
+        if C_MO is None:
+            """C_MO from scf pennylane as initial guess"""
+            _, coeffs, _, h_core, rep_tensor = qml.qchem.scf(mol)()
+            C_MO = coeffs
+            h_MO = qml.math.einsum("qr,rs,st->qt", C_MO.T, h_core, C_MO)
+            I_MO = qml.math.swapaxes(
+                qml.math.einsum(
+                    "ab,cd,bdeg,ef,gh->acfh", C_MO.T, C_MO.T, rep_tensor, C_MO, C_MO
+                ),
+                1,
+                3,
+            )
         else:
-            print("C_MO from scf pennylane as initial guess False")
-            
-        core, h_MO, I_MO = qml.qchem.electron_integrals(mol)()  # MO integrals
+            _, _, _, h_core, rep_tensor = qml.qchem.scf(mol)()
+            """C_MO from MO optimization"""
+            h_MO = qml.math.einsum("qr,rs,st->qt", C_MO.T, h_core, C_MO)
+            I_MO = qml.math.swapaxes(
+                qml.math.einsum(
+                    "ab,cd,bdeg,ef,gh->acfh", C_MO.T, C_MO.T, rep_tensor, C_MO, C_MO
+                ),
+                1,
+                3,
+            )
         
+        core = qml.qchem.nuclear_energy(mol.nuclear_charges, mol.coordinates)()
         
         E_nuc = core[0]
         n_elec = mol.n_electrons
@@ -552,7 +625,7 @@ class NOFVQE:
         #norb = int(h_MO.shape[0])
         self.HighSpin = False
         self.MSpin = 0
-        return jnp.array(E_nuc), jnp.array(h_MO), jnp.array(I_MO), n_elec, norb
+        return jnp.array(E_nuc), jnp.array(h_MO), jnp.array(I_MO), n_elec, norb, C_MO
     
     # ---------- integrals at a geometry (MO basis) from pynof ----------    
     def _mo_integrals_pynof(self):
@@ -593,17 +666,7 @@ class NOFVQE:
             return E_nuc, h_MO, J_MO, K_MO, n_elec, norb
 
         else:
-            E_nuc, h_MO, I_MO, n_elec, norb = self._mo_integrals_pennylane(crd)
-            
-            if C_MO is not None:
-                print("C_MO guest")
-                h_MO = np.einsum("mi,mn,nj->ij",C_MO,h_MO,C_MO,optimize=True)
-                I_MO = np.einsum("mp,nq,mnsl,sr,lt->pqrt",C_MO,C_MO,I_MO,C_MO,C_MO,optimize=True)
-            else:
-                print("C_MO is None")
-                self.C_AO_MO = self.coeffs
-                print("self.C_AO_MO",self.C_AO_MO)
-                
+            E_nuc, h_MO, I_MO, n_elec, norb, C_MO = self._mo_integrals_pennylane(crd, C_MO)    
                 
             if self.pair_doubles:
                 # Kill singles completely (seniority-zero ansatz)
@@ -618,7 +681,7 @@ class NOFVQE:
             print("Singles:",self.singles)
             print("Size Doubles:",len(self.doubles))
             print("Doubles:",self.doubles)
-            return E_nuc, h_MO, I_MO, n_elec, norb
+            return E_nuc, h_MO, I_MO, n_elec, norb, C_MO
 
     def _wrap_angles(self, p):
         p = np.asarray(p, dtype=float)
