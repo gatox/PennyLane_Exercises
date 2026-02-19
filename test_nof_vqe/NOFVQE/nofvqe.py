@@ -2,8 +2,6 @@ import time
 import pennylane as qml
 from pennylane import numpy as pnp
 import numpy as np
-#from numba import njit
-
 
 from pennylane import FermiC, FermiA
 from pennylane import jordan_wigner
@@ -307,24 +305,6 @@ class NOFVQE:
         C_old = pynof.check_ortho(C_old,S_ao,p)
         return C_old
     
-    #@njit(cache=True)
-    def _compute_gammas_softmax(self, ndoc, ncwo):
-        """Compute a guess for gammas in the softmax parameterization
-        of the occupation numbers"""
-
-        #TODO: Add equations and look to reduce a variable
-
-        nv = (ncwo+1)*ndoc
-
-        gamma = np.zeros((nv))
-        for i in range(ndoc):
-            gamma[i] = np.log(0.999)
-            for j in range(ncwo):
-                ig = ndoc + (ndoc - i - 1)*ncwo + j
-                gamma[ig] = np.log(0.001/ncwo)
-        return gamma
-    
-    
     def _calcorbg_pennylane(self, y,n,cj12,ck12,C,H_MO,I_MO):
 
         Cnew = self._rotate_orbital_pennylane(y,C)
@@ -365,28 +345,6 @@ class NOFVQE:
 
             # -C^K_pq dK_pq/dy_ab 
             elag[:,:self.nbf5] += -np.einsum('bq,aqbq->ab',ck12,I_MO[:,:self.nbf5,:self.nbf5,:self.nbf5],optimize=True)
-            print("Before perturbation elag:",elag)
-            # ===== tiny orbital-driving term (QC-safe) =====
-            # build a simple Fock-like matrix in current basis
-            F = Hmat.copy()
-            for p in range(self.nbf5):
-                for q in range(self.nbf5):
-                    F[p,q] += sum(
-                        n[r] * (2*I_MO[p,r,q,r] - I_MO[p,r,r,q])
-                        for r in range(self.nbf5)
-                    )
-
-           # ===== tiny orbital-driving term (SAFE) =====
-            eta = 1e-6  # much smaller
-
-            for a in range(self.nbf5):
-                for b in range(self.nbf5):
-                    if abs(n[a] - n[b]) > 1e-6:
-                        g = eta * (n[a] - n[b]) * F[a, b]
-                        elag[a, b] += g
-                        elag[b, a] -= g
-            # ==============================================
-            print("After perturbation elag:", elag)
         else:
             print("MSpin must be zero")
         return elag,Hmat
@@ -494,7 +452,7 @@ class NOFVQE:
 
         return E_orb, C_new
 
-    def run_scnofvqe(self, max_outer=10, tol=1e-6):
+    def run_scnofvqe(self, max_outer=1, tol=1e-6):
         """
         Self-consistent NOF-VQE loop:
         VQE amplitudes <-> orbital optimization
@@ -505,7 +463,7 @@ class NOFVQE:
         C_MO = None
         init_param = self.init_param
         
-        for it in range(40):
+        for it in range(max_outer):
             print(f"\n==== SC-NOFVQE Iteration {it} ====")
 
             # 1. Build integrals with current orbitals
@@ -514,11 +472,6 @@ class NOFVQE:
             else:
                 self.E_nuc, self.h_MO, self.I_MO, self.n_elec, self.norb = self._mo_integrals(self.crd, C_MO=C_MO)
         
-            # self.nv = self.nbf5 - self.no1 - self.nsoc
-            # gamma = self._compute_gammas_softmax(self.ndoc, self.ncwo)
-            
-            # print("Edison gamma:",gamma)
-            # breakpoint()
             self.init_param = self._initial_params(init_param)
 
             # 2. Run VQE (pair-only)
@@ -563,6 +516,8 @@ class NOFVQE:
             print("C_MO from scf pennylane as initial guess False")
             
         core, h_MO, I_MO = qml.qchem.electron_integrals(mol)()  # MO integrals
+        
+        
         E_nuc = core[0]
         n_elec = mol.n_electrons
         self.n_elec = n_elec
