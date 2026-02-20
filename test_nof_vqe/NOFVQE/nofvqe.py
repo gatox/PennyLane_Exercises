@@ -400,7 +400,37 @@ class NOFVQE:
             print("MSpin must be zero")
         return elag,Hmat
     
+    # def _rotate_orbital_pennylane(self, y,C):
+    #     """
+    #     Safe orbital rotation in AO metric
+    #     """
+    #     S = self.S_overlap
+    #     # 1. Löwdin
+    #     X = fractional_matrix_power(S, -0.5)
+    #     Xinv = fractional_matrix_power(S,  0.5)
+
+    #     C_ortho = X.T @ C
+        
+    #     # 2. Build antisymmetric generator
+    #     ynew = np.zeros((self.nbf,self.nbf))
+    #     n = 0
+    #     for i in range(self.nbf5):
+    #         for j in range(i+1,self.nbf):
+    #             ynew[i,j] =  y[n]
+    #             ynew[j,i] = -y[n]
+    #             n += 1
+                
+    #     # 3. Euclidean rotation
+    #     U = expm(ynew)
+    #     # 4. Back to AO metric
+    #     Cnew = Xinv.T @ (C_ortho @ U)
+
+    #     #Cnew = jnp.einsum("mr,rp->mp",C,U,optimize=True)
+
+    #     return Cnew
+    
     def _rotate_orbital_pennylane(self, y,C):
+        print("Orbitals before rotation",C)
         ynew = np.zeros((self.nbf,self.nbf))
 
         n = 0
@@ -411,30 +441,34 @@ class NOFVQE:
                 n += 1
 
         U = expm(ynew)
-
+        print("Rotation matrix",ynew)
         Cnew = jnp.einsum("mr,rp->mp",C,U,optimize=True)
-
+        print("Orbitals after rotation",Cnew)
+        #breakpoint()
         return Cnew
     
-    def _computeJKH_MO_to_NO_pennylane(self, vecs, h_MO, I_MO):
-        h_NO = jnp.einsum("ij,ip,jq->pq", h_MO, vecs, vecs, optimize=True)
-        J_NO = jnp.einsum("ijkl,ip,jq,kq,lp->pq", I_MO, vecs, vecs, vecs, vecs, optimize=True)
-        K_NO = jnp.einsum("ijkl,ip,jp,kq,lq->pq", I_MO, vecs, vecs, vecs, vecs, optimize=True)
-        return h_NO, J_NO, K_NO
+    # def _computeJKH_MO_to_NO_pennylane(self, vecs, h_MO, I_MO):
+    #     h_NO = jnp.einsum("ij,ip,jq->pq", h_MO, vecs, vecs, optimize=True)
+    #     J_NO = jnp.einsum("ijkl,ip,jq,kq,lp->pq", I_MO, vecs, vecs, vecs, vecs, optimize=True)
+    #     K_NO = jnp.einsum("ijkl,ip,jp,kq,lq->pq", I_MO, vecs, vecs, vecs, vecs, optimize=True)
+    #     return h_NO, J_NO, K_NO
     
     def _calcorbe_pennylane(self, y,n,cj12,ck12,C, h_MO, I_MO):
 
         Cnew = self._rotate_orbital_pennylane(y,C)
+        _, h_MO, I_MO, _, _, _ =self._mo_integrals_pennylane(self.crd, Cnew)
+        vecs = jnp.eye(Cnew.shape[0])
+        J_MO = jnp.einsum("ijkl,ip,jq,kq,lp->pq", I_MO, vecs, vecs, vecs, vecs, optimize=True)
+        K_MO = jnp.einsum("ijkl,ip,jp,kq,lq->pq", I_MO, vecs, vecs, vecs, vecs, optimize=True)
 
-        h_NO, J_NO, K_NO = self._computeJKH_MO_to_NO_pennylane(Cnew, h_MO, I_MO)
-
-        E = self._calce(n,cj12,ck12,J_NO,K_NO,h_NO)
+        E = self._calce(n,cj12,ck12,J_MO,K_MO,h_MO)
 
         return E
     
     def _orbopt_adam_mod(self,n, cj12,ck12, C, h_MO, I_MO):
         y = np.zeros((self.nvar))
         E = self._calcorbe_pennylane(y, n,cj12,ck12,C,h_MO, I_MO)
+        print("Energy_calcorbe:",E)
         
         alpha = self.nalpha
         beta1 = 0.7
@@ -453,9 +487,9 @@ class NOFVQE:
         
         for i in range(self.maxloop):
             nit += 1
-
+            
             grad = self._calcorbg_pennylane(y*0, n,cj12,ck12, C, h_MO, I_MO)
-
+            print("GRAD:",grad)
             if np.linalg.norm(grad) < 10**-4 and improved:
                 success = True
                 break
@@ -466,6 +500,7 @@ class NOFVQE:
             vhat = v / (1.0 - beta2**(i+1))
             vhat_max = np.maximum(vhat_max, vhat)
             y = - alpha * mhat / (np.sqrt(vhat_max + 10**-8)) #AMSgrad
+            
             C = self._rotate_orbital_pennylane(y,C)
             
             E = self._calcorbe_pennylane(y*0, n,cj12,ck12,C,h_MO, I_MO)
@@ -479,7 +514,7 @@ class NOFVQE:
             self.nalpha = self.nalpha/10
             self.maxloop = self.maxloop + 30
             #print("      alpha ",p.alpha)
-
+        #breakpoint()
         return best_E,best_C,nit,success
         
     
@@ -488,12 +523,10 @@ class NOFVQE:
         Perform classical orbital optimization using PyNOF.
         H_MO and I_MO
         """
-        print("Printing MO old:",C)
         E_orb, C_new, nit, success = self._orbopt_adam_mod(
             n, cj12,ck12, C, H_MO, I_MO
         )
         
-        print("Printing MO new:",C_new)
         if not success:
             print("Warning: orbital optimization did not fully converge")
 
@@ -1482,23 +1515,24 @@ class NOFVQE:
 # Run the calculation
 # =========================
 if __name__ == "__main__":
-    import sys
-    if len(sys.argv) < 2:
-        print("Usage: python nofvqe.py <file.xyz>")
-        sys.exit(1)
+    # import sys
+    # if len(sys.argv) < 2:
+    #     print("Usage: python nofvqe.py <file.xyz>")
+    #     sys.exit(1)
 
-    xyz_file = sys.argv[1]
-    functional=sys.argv[2]
-    #functional="pnof5"
+    #xyz_file = sys.argv[1]
+    xyz_file = "lih_bohr.xyz"
+    #functional=sys.argv[2]
+    functional="pnof5"
     #functional="vqe"
     conv_tol=1e-7
     #init_param=0.1
     init_param=None
     basis='sto-3g'
     max_iterations=500
-    gradient=sys.argv[3]
+    #gradient=sys.argv[3]
     #gradient="analytics"
-    #gradient="df_fedorov"
+    gradient="df_fedorov"
     d_shift=1e-4
     C_MO = "guest_C_MO"
     dev="simulator"
@@ -1507,14 +1541,14 @@ if __name__ == "__main__":
     n_shots=10000
     optimization_level=3
     resilience_level=0
-    arg = sys.argv[4].lower()
-    if arg == "true":
-        pair_double = True
-    elif arg == "false":
-        pair_double = False
-    else:
-        raise ValueError("pair_double must be True or False")
-    #pair_double = False
+    # arg = sys.argv[4].lower()
+    # if arg == "true":
+    #     pair_double = True
+    # elif arg == "false":
+    #     pair_double = False
+    # else:
+    #     raise ValueError("pair_double must be True or False")
+    pair_double = True
     cal = NOFVQE(
             xyz_file, 
             functional=functional, 
