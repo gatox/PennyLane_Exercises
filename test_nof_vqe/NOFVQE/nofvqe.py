@@ -356,11 +356,11 @@ class NOFVQE:
         C_old = pynof.check_ortho(C_old,S_ao,p)
         return C_old
     
-    def _calcorbg_pennylane(self, y,n,cj12,ck12,C,H_MO,I_MO):
+    def _calcorbg_pennylane(self, y,n,cj12,ck12,C):
 
         Cnew = self._rotate_orbital_pennylane(y,C)
 
-        elag,_ = self._computeLagrange2_pennylane(n,cj12,ck12,Cnew,H_MO,I_MO)
+        elag,_ = self._computeLagrange2_pennylane(n,cj12,ck12,Cnew)
 
         grad = 4*(elag - elag.T)
 
@@ -375,10 +375,10 @@ class NOFVQE:
 
         return grad
     
-    def _computeLagrange2_pennylane(self,n,cj12,ck12,C,H_MO,I_MO):
-        Hmat = np.einsum("mi,mn,nj->ij",C,H_MO,C[:,:self.nbf5],optimize=True)
-        I_MO = np.einsum("mp,nq,mnsl,sr,lt->pqrt",C,C[:,:self.nbf5],I_MO,C[:,:self.nbf5],C[:,:self.nbf5],optimize=True)
-
+    def _computeLagrange2_pennylane(self,n,cj12,ck12,C):
+        
+        _, Hmat, I_MO, _, _, _ =self._mo_integrals_pennylane(self.crd, C, lagrange2=True)
+        
         cj12 = cj12 - jnp.diag(jnp.diag(cj12)) # Remove diag.
         ck12 = ck12 - jnp.diag(jnp.diag(ck12)) # Remove diag.
         
@@ -430,7 +430,7 @@ class NOFVQE:
     #     return Cnew
     
     def _rotate_orbital_pennylane(self, y,C):
-        print("Orbitals before rotation",C)
+        
         ynew = np.zeros((self.nbf,self.nbf))
 
         n = 0
@@ -441,9 +441,8 @@ class NOFVQE:
                 n += 1
 
         U = expm(ynew)
-        print("Rotation matrix",ynew)
         Cnew = jnp.einsum("mr,rp->mp",C,U,optimize=True)
-        print("Orbitals after rotation",Cnew)
+
         #breakpoint()
         return Cnew
     
@@ -453,7 +452,7 @@ class NOFVQE:
     #     K_NO = jnp.einsum("ijkl,ip,jp,kq,lq->pq", I_MO, vecs, vecs, vecs, vecs, optimize=True)
     #     return h_NO, J_NO, K_NO
     
-    def _calcorbe_pennylane(self, y,n,cj12,ck12,C, h_MO, I_MO):
+    def _calcorbe_pennylane(self, y,n,cj12,ck12,C):
 
         Cnew = self._rotate_orbital_pennylane(y,C)
         _, h_MO, I_MO, _, _, _ =self._mo_integrals_pennylane(self.crd, Cnew)
@@ -465,10 +464,9 @@ class NOFVQE:
 
         return E
     
-    def _orbopt_adam_mod(self,n, cj12,ck12, C, h_MO, I_MO):
+    def _orbopt_adam_mod(self,n, cj12,ck12, C):
         y = np.zeros((self.nvar))
-        E = self._calcorbe_pennylane(y, n,cj12,ck12,C,h_MO, I_MO)
-        print("Energy_calcorbe:",E)
+        E = self._calcorbe_pennylane(y, n,cj12,ck12,C)
         
         alpha = self.nalpha
         beta1 = 0.7
@@ -488,7 +486,7 @@ class NOFVQE:
         for i in range(self.maxloop):
             nit += 1
             
-            grad = self._calcorbg_pennylane(y*0, n,cj12,ck12, C, h_MO, I_MO)
+            grad = self._calcorbg_pennylane(y*0, n,cj12,ck12, C)
             print("GRAD:",grad)
             if np.linalg.norm(grad) < 10**-4 and improved:
                 success = True
@@ -500,11 +498,11 @@ class NOFVQE:
             vhat = v / (1.0 - beta2**(i+1))
             vhat_max = np.maximum(vhat_max, vhat)
             y = - alpha * mhat / (np.sqrt(vhat_max + 10**-8)) #AMSgrad
-            
+            print("Rotation y after compute it:",y)
             C = self._rotate_orbital_pennylane(y,C)
             
-            E = self._calcorbe_pennylane(y*0, n,cj12,ck12,C,h_MO, I_MO)
-            #print(i," ",E," ", E < best_E)
+            E = self._calcorbe_pennylane(y*0, n,cj12,ck12,C)
+            print(i," ",E," ", E < best_E)
             if E < best_E:
                 best_C = C
                 best_E = E
@@ -514,17 +512,17 @@ class NOFVQE:
             self.nalpha = self.nalpha/10
             self.maxloop = self.maxloop + 30
             #print("      alpha ",p.alpha)
-        #breakpoint()
+        
         return best_E,best_C,nit,success
         
     
-    def _orbital_optimization(self, n, cj12,ck12, C, H_MO, I_MO):
+    def _orbital_optimization(self, n, cj12,ck12, C):
         """
         Perform classical orbital optimization using PyNOF.
         H_MO and I_MO
         """
         E_orb, C_new, nit, success = self._orbopt_adam_mod(
-            n, cj12,ck12, C, H_MO, I_MO
+            n, cj12,ck12, C
         )
         
         if not success:
@@ -572,7 +570,7 @@ class NOFVQE:
             print(f"VQE energy: {E:.10f} Ha")
             
             # 4. Orbital optimization
-            E_orb, C_new = self._orbital_optimization(n, cj12,ck12, C_start, self.h_MO, self.I_MO)
+            E_orb, C_new = self._orbital_optimization(n, cj12,ck12, C_start)
             print(f"Orbital optimization energy: {E_orb:.10f} Ha")
             
             # Convergence check (VQE and Orbital energy)
@@ -590,7 +588,7 @@ class NOFVQE:
 
     
     # ---------- integrals at a geometry (MO basis) from pennylane ----------
-    def _mo_integrals_pennylane(self, crd, C_MO):
+    def _mo_integrals_pennylane(self, crd, C_MO, lagrange2=False):
         """Return (E_nuc, h_MO, I_MO, n_electrons, norb) at given geometry (bohr)."""
         mol = qml.qchem.Molecule(symbols = self.symbols, 
                                  coordinates = crd, 
@@ -600,6 +598,7 @@ class NOFVQE:
                                  unit = self.units)
         if C_MO is None:
             """C_MO from scf pennylane as initial guess"""
+            print("C_MO from scf pennylane as initial guess")
             _, coeffs, _, h_core, rep_tensor = qml.qchem.scf(mol)()
             C_MO = coeffs
             h_MO = qml.math.einsum("qr,rs,st->qt", C_MO.T, h_core, C_MO)
@@ -610,9 +609,22 @@ class NOFVQE:
                 1,
                 3,
             )
+        elif lagrange2:
+            _, _, _, h_core, rep_tensor = qml.qchem.scf(mol)()
+            print("C_MO from MO optimization")
+            h_MO = qml.math.einsum("rq,rs,st->qt", C_MO, h_core, C_MO[:,:self.nbf5])
+            I_MO = qml.math.swapaxes(
+                qml.math.einsum(
+                    "ba,dc,bdeg,ef,gh->acfh", C_MO, C_MO[:,:self.nbf5], rep_tensor, C_MO[:,:self.nbf5], C_MO[:,:self.nbf5]
+                ),
+                1,
+                3,
+            )
+            
         else:
             _, _, _, h_core, rep_tensor = qml.qchem.scf(mol)()
             """C_MO from MO optimization"""
+            print("C_MO from MO optimization")
             h_MO = qml.math.einsum("qr,rs,st->qt", C_MO.T, h_core, C_MO)
             I_MO = qml.math.swapaxes(
                 qml.math.einsum(
