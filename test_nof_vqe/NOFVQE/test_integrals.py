@@ -2,7 +2,7 @@ import pennylane as qml
 from pennylane import numpy as pnp
 import numpy as np
 
-from scipy.linalg import eigh
+from scipy.linalg import eigh, fractional_matrix_power
 
 import pynof
 
@@ -34,6 +34,9 @@ two = qml.math.swapaxes(
     3,
 )
 core_constant = qml.qchem.nuclear_energy(mol.nuclear_charges, mol.coordinates)()
+
+S_matrix = qml.qchem.overlap_matrix(mol.basis_set)()
+X_matrix = fractional_matrix_power(S_matrix, -0.5)
 breakpoint()
 
 
