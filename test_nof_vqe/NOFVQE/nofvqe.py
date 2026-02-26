@@ -256,6 +256,8 @@ class NOFVQE:
             #params = np.random.normal(scale=0.05, size=n_params)
             #print("Params after random values:", params)
             params = np.full(n_params, 0.1)
+            #params = [0.00360602, 0.00262795, 0.03401656, 0.06821828]
+            #params = [-0.00354525, -0.00473337,  0.27794458,  0.05215284]
             print("Params after fill with 0.1 value:", params)
         else:
             print("Params is not none:", params)
@@ -381,21 +383,22 @@ class NOFVQE:
         
         cj12 = cj12 - jnp.diag(jnp.diag(cj12)) # Remove diag.
         ck12 = ck12 - jnp.diag(jnp.diag(ck12)) # Remove diag.
-        
+        n_test = n
         elag = np.zeros((self.nbf,self.nbf))
         if(self.MSpin==0):
             # 2ndH/dy_ab
-            elag[:,:self.nbf5] +=  np.einsum('b,ab->ab',n,Hmat[:,:self.nbf5],optimize=True)
+            
+            elag[:,:self.nbf5] +=  jnp.einsum('b,ab->ab',n[:self.nbf5],Hmat[:,:self.nbf5],optimize=True)
 
             # dJ_pp/dy_ab
-            elag[:,:self.nbeta] +=  np.einsum('b,abbb->ab',n[:self.nbeta],I_MO[:,:self.nbeta,:self.nbeta,:self.nbeta],optimize=True)
-            elag[:,self.nalpha:self.nbf5] +=  np.einsum('b,abbb->ab',n[self.nalpha:self.nbf5],I_MO[:,self.nalpha:self.nbf5,self.nalpha:self.nbf5,self.nalpha:self.nbf5],optimize=True)
-
+            elag[:,:self.nbeta] +=  jnp.einsum('b,abbb->ab',n[:self.nbeta],I_MO[:,:self.nbeta,:self.nbeta,:self.nbeta],optimize=True)
+            elag[:,self.nalpha:self.nbf5] +=  jnp.einsum('b,abbb->ab',n[self.nalpha:self.nbf5],I_MO[:,self.nalpha:self.nbf5,self.nalpha:self.nbf5,self.nalpha:self.nbf5],optimize=True)
+            
             # C^J_pq dJ_pq/dy_ab 
-            elag[:,:self.nbf5] +=  np.einsum('bq,abqq->ab',cj12,I_MO[:,:self.nbf5,:self.nbf5,:self.nbf5],optimize=True)
+            elag[:,:self.nbf5] +=  jnp.einsum('bq,abqq->ab',cj12[:self.nbf5,:self.nbf5],I_MO[:,:self.nbf5,:self.nbf5,:self.nbf5],optimize=True)
 
             # -C^K_pq dK_pq/dy_ab 
-            elag[:,:self.nbf5] += -np.einsum('bq,aqbq->ab',ck12,I_MO[:,:self.nbf5,:self.nbf5,:self.nbf5],optimize=True)
+            elag[:,:self.nbf5] += -jnp.einsum('bq,aqbq->ab',ck12[:self.nbf5,:self.nbf5],I_MO[:,:self.nbf5,:self.nbf5,:self.nbf5],optimize=True)
         else:
             print("MSpin must be zero")
         return elag,Hmat
@@ -530,15 +533,17 @@ class NOFVQE:
 
             E_orb, C_new = self._orbital_optimization(n, cj12,ck12, C_start)
             print(f"Orbital optimization energy: {E_orb:.10f} Ha")
-            breakpoint()
+        
 
-            # 2. Run VQE (pair-only)
-            E, params, rdm1, n, vecs, cj12, ck12 = self.ene_vqe()
+            self.E_nuc, self.h_MO, self.I_MO, self.n_elec, self.norb, self.C_MO = self._mo_integrals(self.crd, C_MO=C_new)
             
+            # 2. Run VQE (pair-only)
+            E, params, rdm1, n, vecs, cj12, ck12 = self.ene_vqe(self.init_param)
             
             
             print("Updating initial parameters with optimal parameters",params)
             init_param = params
+            
             print(f"VQE energy: {E:.10f} Ha")
             
             
@@ -555,55 +560,56 @@ class NOFVQE:
         self.init_param = init_param
         return E, params, rdm1, n, vecs, cj12, ck12
     
-    # def run_scnofvqe(self, max_outer=30, tol=1e-6):
-    #     """
-    #     Self-consistent NOF-VQE loop:
-    #     VQE amplitudes <-> orbital optimization
-    #     """
-    #     E_old = None
-    #     E_orb_old = None
+    def run_scnofvqe_1(self, max_outer=30, tol=1e-6):
+        """
+        Self-consistent NOF-VQE loop:
+        VQE amplitudes <-> orbital optimization
+        """
+        E_old = None
+        E_orb_old = None
+        rdm1 = None
 
-    #     # Initial orbitals
-    #     C_MO = self.C_AO_MO if self.C_AO_MO is not None else None
-    #     init_param = self.init_param
+        # Initial orbitals
+        C_MO = self.C_AO_MO if self.C_AO_MO is not None else None
+        init_param = self.init_param
         
-    #     for it in range(max_outer):
-    #         print(f"\n==== SC-NOFVQE Iteration {it} ====")
+        for it in range(max_outer):
+            print(f"\n==== SC-NOFVQE Iteration {it} ====")
 
-    #         # 1. Build integrals with scf current orbitals
-    #         self.E_nuc, self.h_MO, self.I_MO, self.n_elec, self.norb, self.C_MO = self._mo_integrals(self.crd, C_MO=C_MO)
+            # 1. Build integrals with scf current orbitals
+            self.E_nuc, self.h_MO, self.I_MO, self.n_elec, self.norb, self.C_MO = self._mo_integrals(self.crd, C_MO=C_MO)
         
-    #         self.init_param = self._initial_params(init_param)
+            self.init_param = self._initial_params(init_param)
 
-    #         # 2. Run VQE (pair-only)
-    #         E, params, rdm1, n, vecs, cj12, ck12 = self.ene_vqe()
+            # 2. Run VQE (pair-only)
+            E, params, rdm1, n, vecs, cj12, ck12 = self.ene_vqe(self.init_param, rdm1, self.C_MO)
             
-    #         # 3. Pre-rotate orbitals if needed
-    #         if (vecs == np.eye(vecs.shape[0])).all():
-    #             C_start = self.C_MO
-    #         else:
-    #             C_start = vecs
+            # 3. Pre-rotate orbitals if needed
+            if (vecs == np.eye(vecs.shape[0])).all():
+                C_start = self.C_MO
+            else:
+                C_start = vecs
             
-    #         print("Updating initial parameters with optimal parameters",params)
-    #         init_param = params
-    #         print(f"VQE energy: {E:.10f} Ha")
+            print("Updating initial parameters with optimal parameters",params)
+            init_param = params
+            print(f"VQE energy: {E:.10f} Ha")
             
-    #         # 4. Orbital optimization
-    #         E_orb, C_new = self._orbital_optimization(n, cj12,ck12, C_start)
-    #         print(f"Orbital optimization energy: {E_orb:.10f} Ha")
+            # 4. Orbital optimization
+            E_orb, C_new = self._orbital_optimization(n, cj12,ck12, C_start)
+            print(f"Orbital optimization energy: {E_orb:.10f} Ha")
             
-    #         # Convergence check (VQE and Orbital energy)
-    #         if E_orb_old is not None:
-    #             if abs(E - E_old) < 1e-6 and abs(E_orb - E_orb_old) < 1e-6:
-    #                 print("SC-NOFVQE converged (occupations)")
-    #                 break
-    #         E_old = E
-    #         E_orb_old = E_orb
-    #         self.C_AO_MO = C_new
-    #         C_MO = C_new
+            # Convergence check (VQE and Orbital energy)
+            if E_orb_old is not None:
+                if abs(E - E_old) < 1e-6 and abs(E_orb - E_orb_old) < 1e-6:
+                    print("SC-NOFVQE converged (occupations)")
+                    break
+            E_old = E
+            E_orb_old = E_orb
+            self.C_AO_MO = C_new
+            C_MO = C_new
 
-    #     self.init_param = init_param
-    #     return E, params, rdm1, n, vecs, cj12, ck12
+        self.init_param = init_param
+        return E, params, rdm1, n, vecs, cj12, ck12
 
     
     # ---------- integrals at a geometry (MO basis) from pennylane ----------
@@ -953,7 +959,7 @@ class NOFVQE:
         
         
 
-    def ene_pnof4(self, params, rdm1=None):
+    def ene_pnof4(self, params, rdm1=None, C_MO=None):
         # Functions based on 1-RDM (J. Chem. Theory Comput. 2025, 21, 5, 2402–2413) and taked from the following repository:
         # https://github.com/felipelewyee/NOF-VQE
         if self.gradient == "analytics":
@@ -1042,8 +1048,6 @@ class NOFVQE:
         else:
             E_nuc, h_MO, I_MO, n_elec, norb = self.E_nuc, self.h_MO, self.I_MO, self.n_elec, self.norb
 
-        F = n_elec // 2  # number of electron pairs
-
         if rdm1 is None:
             rdm1 = self._rdm1_from_circuit(params, n_elec, norb)
 
@@ -1098,15 +1102,15 @@ class NOFVQE:
         
         if(self.MSpin==0):
             # 2H + J
-            E = E + 2*np.einsum('i,i',n,np.diagonal(H_core),optimize=True)
-            E = E + np.einsum('i,i',n[:self.nbeta],np.diagonal(J_MO)[:self.nbeta],optimize=True)
-            E = E + np.einsum('i,i',n[self.nalpha:self.nbf5],np.diagonal(J_MO)[self.nalpha:self.nbf5],optimize=True)
+            E = E + 2*jnp.einsum('i,i',n,jnp.diagonal(H_core),optimize=True)
+            E = E + jnp.einsum('i,i',n[:self.nbeta],jnp.diagonal(J_MO)[:self.nbeta],optimize=True)
+            E = E + jnp.einsum('i,i',n[self.nalpha:self.nbf5],jnp.diagonal(J_MO)[self.nalpha:self.nbf5],optimize=True)
             #C^J JMO
             cj12 = cj12 - jnp.diag(jnp.diag(cj12)) # Remove diag.
-            E = E + np.einsum('ij,ji->',cj12,J_MO,optimize=True) # sum_ij
+            E = E + jnp.einsum('ij,ji->',cj12,J_MO,optimize=True) # sum_ij
             #C^K KMO
             ck12 = ck12 - jnp.diag(jnp.diag(ck12)) # Remove diag.
-            E = E - np.einsum('ij,ji->',ck12,K_MO,optimize=True) # sum_ij
+            E = E - jnp.einsum('ij,ji->',ck12,K_MO,optimize=True) # sum_ij
         else:
             print(f"Mspin:{self.MSpin} must be cero")
         return E
@@ -1268,6 +1272,7 @@ class NOFVQE:
                 )
 
             iter_counter["i"] += 1
+            
         res = minimize(
             E_scipy,
             np.array(params, dtype=float),
@@ -1283,9 +1288,6 @@ class NOFVQE:
             },
             #callback=callback,
         )
-        if self.max_iterations <= 500:
-            print("Max iterations are lower than 500")
-            self.max_iterations +=10
         
         res_x = np.asarray(res.x, dtype=float)
         res_x_wrapped = self._wrap_angles(res_x)
@@ -1339,9 +1341,11 @@ class NOFVQE:
 
     def _vqe(self, E_fn, params, method=None, max_iterations=None):
         if method is None:
-            method=self.opt_circ
+            method = self.opt_circ
         if max_iterations is None:
             max_iterations = self.max_iterations
+        if params is None:
+            params = self.init_param
         if method.lower() in ["sgd", "adam"]:
             return self._vqe_optax(E_fn, method, params, max_iterations)
         elif method.lower() in ["slsqp", "l-bfgs-b", "cobyla"]:
@@ -1355,7 +1359,7 @@ class NOFVQE:
                 f"Optimizer method {method} not implemented. Choose: 'adam', 'sgd', 'spsa', 'sgd', 'slsqp', or 'l-bfgs-b'."
             )
 
-    def ene_vqe(self):
+    def ene_vqe(self, params=None):
         print("functional:",self.functional)
         if self.functional == "vqe":
             method_opt = "slsqp"
@@ -1378,7 +1382,7 @@ class NOFVQE:
             return E_final, params_final, None, None, None, None, None
         elif self.functional in ["pnof4", "pnof5"]:
             E_history, params_history, rdm1_history, n_history, vecs_history, cj12_history, ck12_history = self._vqe(
-                self.ene_nof, self.init_param
+                self.ene_nof, params
                 )
             self.opt_param = params_history[-1]
             self.opt_rdm1 = rdm1_history[-1]
@@ -1603,8 +1607,8 @@ if __name__ == "__main__":
     #     sys.exit(1)
 
     #xyz_file = sys.argv[1]
-    #xyz_file = "h2_bohr.xyz"
     xyz_file = "lih_bohr.xyz"
+    #xyz_file = "fh_bohr.xyz"
     #functional=sys.argv[2]
     functional="pnof5"
     #functional="vqe"
@@ -1612,7 +1616,7 @@ if __name__ == "__main__":
     #init_param=0.1
     init_param=None
     basis='sto-3g'
-    max_iterations=10
+    max_iterations=200
     #gradient=sys.argv[3]
     #gradient="analytics"
     gradient="df_fedorov"
@@ -1654,6 +1658,7 @@ if __name__ == "__main__":
     # E_nuc, h_MO, I_MO, n_elec, norb, C_MO = cal._mo_integrals_pennylane(cal.crd, C_MO=C_MO)
     # breakpoint()
     if pair_double:
+        #E_min, params_opt, rdm1_opt, n, vecs, cj12, ck12 = cal.run_scnofvqe_1()
         E_min, params_opt, rdm1_opt, n, vecs, cj12, ck12 = cal.run_scnofvqe()
         print("Min Ene VQE and param:", E_min, params_opt)
         # Nuclear gradient
