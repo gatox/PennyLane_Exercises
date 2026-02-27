@@ -243,8 +243,6 @@ class NOFVQE:
             #params = np.random.normal(scale=0.05, size=n_params)
             #print("Params after random values:", params)
             params = np.full(n_params, 0.1)
-            #params = [0.00360602, 0.00262795, 0.03401656, 0.06821828]
-            #params = [-0.00354525, -0.00473337,  0.27794458,  0.05215284]
             print("Params after fill with 0.1 value:", params)
         else:
             print("Params is not none:", params)
@@ -442,7 +440,7 @@ class NOFVQE:
             nit += 1
             
             grad = self._calcorbg_pennylane(y*0, n,cj12,ck12, C)
-            print("GRAD:",grad)
+            #print("GRAD:",grad)
             if np.linalg.norm(grad) < 10**-4 and improved:
                 success = True
                 break
@@ -453,11 +451,11 @@ class NOFVQE:
             vhat = v / (1.0 - beta2**(i+1))
             vhat_max = np.maximum(vhat_max, vhat)
             y = - alpha * mhat / (np.sqrt(vhat_max + 10**-8)) #AMSgrad
-            print("Rotation y after compute it:",y)
+            #print("Rotation y after compute it:",y)
             C = self._rotate_orbital_pennylane(y,C)
             
             E = self._calcorbe_pennylane(y*0, n,cj12,ck12,C)
-            print(i," ",E," ", E < best_E)
+            #print(i," ",E," ", E < best_E)
             if E < best_E:
                 best_C = C
                 best_E = E
@@ -476,6 +474,7 @@ class NOFVQE:
         Perform classical orbital optimization using PyNOF.
         H_MO and I_MO
         """
+        print("Orbital Optimization (ADAM)")
         E_orb, C_new, nit, success = self._orbopt_adam(
             n, cj12,ck12, C
         )
@@ -488,7 +487,7 @@ class NOFVQE:
 
         return E_orb, C_new
 
-    def run_scnofvqe(self, max_outer=30, tol=1e-6):
+    def run_scnofvqe(self, max_outer=30, tol=1e-3):
         """
         Self-consistent NOF-VQE loop:
         VQE amplitudes <-> orbital optimization
@@ -517,11 +516,11 @@ class NOFVQE:
                 C_start = self.C_MO
             else:
                 C_start = vecs
-
+            
             E_orb, C_new = self._orbital_optimization(n, cj12,ck12, C_start)
             print(f"Orbital optimization energy: {E_orb:.10f} Ha")
         
-
+            # Rotating the integral into the Optimal Orbitals
             self.E_nuc, self.h_MO, self.I_MO, self.n_elec, self.norb, self.C_MO = self._mo_integrals(self.crd, C_MO=C_new)
             
             # 2. Run VQE (pair-only)
@@ -536,7 +535,7 @@ class NOFVQE:
             
             # Convergence check (VQE and Orbital energy)
             if E_orb_old is not None:
-                if abs(E - E_old) < 1e-6 and abs(E_orb - E_orb_old) < 1e-6:
+                if abs(E - E_old) < tol and abs(E_orb - E_orb_old) < tol:
                     print("SC-NOFVQE converged (occupations)")
                     break
             E_old = E
@@ -547,7 +546,7 @@ class NOFVQE:
         self.init_param = init_param
         return E, params, rdm1, n, vecs, cj12, ck12
     
-    def run_scnofvqe_1(self, max_outer=30, tol=1e-6):
+    def run_scnofvqe_1(self, max_outer=30, tol=1e-3):
         """
         Self-consistent NOF-VQE loop:
         VQE amplitudes <-> orbital optimization
@@ -587,7 +586,7 @@ class NOFVQE:
             
             # Convergence check (VQE and Orbital energy)
             if E_orb_old is not None:
-                if abs(E - E_old) < 1e-6 and abs(E_orb - E_orb_old) < 1e-6:
+                if abs(E - E_old) < tol and abs(E_orb - E_orb_old) < tol:
                     print("SC-NOFVQE converged (occupations)")
                     break
             E_old = E
@@ -623,7 +622,8 @@ class NOFVQE:
             )
         elif lagrange2:
             _, _, _, h_core, rep_tensor = qml.qchem.scf(mol)()
-            print("C_MO from MO optimization to the lagrange2")
+            """C_MO from MO optimization to the lagrange2"""
+            #print("C_MO from MO optimization to the lagrange2")
             h_MO = qml.math.einsum("rq,rs,st->qt", C_MO, h_core, C_MO[:,:self.nbf5])
             I_MO = qml.math.swapaxes(
                 qml.math.einsum(
@@ -636,7 +636,7 @@ class NOFVQE:
         else:
             _, _, _, h_core, rep_tensor = qml.qchem.scf(mol)()
             """C_MO from MO optimization"""
-            print("C_MO from MO optimization")
+            #print("C_MO from MO optimization")
             h_MO = qml.math.einsum("qr,rs,st->qt", C_MO.T, h_core, C_MO)
             I_MO = qml.math.swapaxes(
                 qml.math.einsum(
@@ -1461,8 +1461,8 @@ if __name__ == "__main__":
     #     sys.exit(1)
 
     #xyz_file = sys.argv[1]
-    #xyz_file = "h2_bohr.xyz"
-    xyz_file = "h2_bohr.xyz"
+    xyz_file = "lih_bohr.xyz"
+    #xyz_file = "lih_bohr.xyz"
     #functional=sys.argv[2]
     functional="pnof4"
     #functional="vqe"
@@ -1477,8 +1477,8 @@ if __name__ == "__main__":
     d_shift=1e-4
     C_MO = "guest_C_MO"
     dev="simulator"
-    opt_circ="sgd"
-    #opt_circ="slsqp"
+    #opt_circ="sgd"
+    opt_circ="slsqp"
     n_shots=10000
     optimization_level=3
     resilience_level=0
@@ -1489,7 +1489,7 @@ if __name__ == "__main__":
     #     pair_double = False
     # else:
     #     raise ValueError("pair_double must be True or False")
-    pair_double = False
+    pair_double = True
     cal = NOFVQE(
             xyz_file, 
             functional=functional, 
