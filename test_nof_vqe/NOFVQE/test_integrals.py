@@ -8,7 +8,7 @@ import pynof
 
 symbols = ["Li", "H"]
 geometry = np.array([[0.0, 0.0, 0.0],
-                      [0.0, 0.0, 3.015]])  # bohr
+                      [0.0, 0.0, 3.02356]])  # bohr
 
 mol = qml.qchem.Molecule(
     symbols,
@@ -41,7 +41,7 @@ breakpoint()
 
 
 E_nuc, h_MO, I_MO = qml.qchem.electron_integrals(mol)()
-
+breakpoint()
 def make_pairs(n_orb, n_elec):
     n_pairs = n_elec // 2
     return [list(range(2*i, 2*i+2)) for i in range(n_pairs)]
