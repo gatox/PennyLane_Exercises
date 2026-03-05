@@ -150,7 +150,6 @@ class NOFVQE:
         self.functional = functional
         self.ipnof = None
         if functional in ["pnof4","pnof5"]:
-            print("functional:",functional)
             self.ipnof = self._func_indix(functional)
         self.conv_tol = conv_tol
         self.max_iterations = max_iterations
@@ -732,6 +731,16 @@ class NOFVQE:
         Self-consistent NOF-VQE loop:
         VQE amplitudes <-> orbital optimization
         """
+        print("")
+
+        print("-----------------------------------------------------")
+        print("                Self-consistent NOF-VQE              ")
+        print("-----------------------------------------------------")
+        
+        print("")
+        
+        print("functional:",self.functional)
+        print("basis_set:",self.basis)
         E_old = None
         E_orb_old = None
         E_HF = None
@@ -1333,7 +1342,6 @@ class NOFVQE:
             )
 
     def ene_vqe(self, params=None):
-        print("functional:",self.functional)
         if self.functional == "vqe":
             method_opt = "slsqp"
             print("==== HF_VQE ====")
@@ -1588,7 +1596,8 @@ if __name__ == "__main__":
     conv_tol=1e-6
     #init_param=0.1
     init_param=None
-    basis='sto-3g'
+    basis=sys.argv[2]
+    #basis='sto-3g'
     #basis='6-31G'
     max_iterations=200
     #gradient=sys.argv[3]

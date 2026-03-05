@@ -1,0 +1,323 @@
+
+-----------------------------------------------------
+                Self-consistent NOF-VQE              
+-----------------------------------------------------
+
+functional: pnof5
+basis_set: cc-pVDZ
+Size Singles: 0
+Singles: []
+Size Doubles: 9
+Doubles: [[0, 1, 2, 3], [0, 1, 4, 5], [0, 1, 6, 7], [0, 1, 8, 9], [0, 1, 10, 11], [0, 1, 12, 13], [0, 1, 14, 15], [0, 1, 16, 17], [0, 1, 18, 19]]
+No violations of the orthonormality
+HF energy: -1.1287160933878333
+
+==== SC-NOFVQE Iteration 0 ====
+Params is none: None
+Params after fill with 0.1 value: [0.1 0.1 0.1 0.1 0.1 0.1 0.1 0.1 0.1]
+VQE Optimization
+Step = 0, Energy = -1.07554257 Ha, Gradient = 7.2e-01
+Step = 1, Energy = -1.15126433 Ha, Gradient = 1.1e-01
+Step = 2, Energy = -1.15323196 Ha, Gradient = 4.7e-02
+Step = 3, Energy = -1.15365459 Ha, Gradient = 2.5e-02
+Step = 4, Energy = -1.15391647 Ha, Gradient = 1.9e-02
+Step = 5, Energy = -1.15397720 Ha, Gradient = 5.0e-03
+Step = 6, Energy = -1.15398642 Ha, Gradient = 6.6e-04
+Step = 7, Energy = -1.15398642 Ha, Gradient = 6.6e-04
+==== Hybrid mode deactivated ====
+Device:  simulator
+Opt_circ:  slsqp
+===============================
+Theta optimization VQE energy: -1.1539864234 Ha
+Orbital Optimization (ADAM)
+Step = 0, Etot = -1.15238017 Ha, E < best_E : False
+Step = 1, Etot = -1.15457482 Ha, E < best_E : True
+Step = 2, Etot = -1.15455659 Ha, E < best_E : False
+Step = 3, Etot = -1.15263151 Ha, E < best_E : False
+Step = 4, Etot = -1.15381024 Ha, E < best_E : False
+Step = 5, Etot = -1.15290273 Ha, E < best_E : False
+Step = 6, Etot = -1.15479135 Ha, E < best_E : True
+Step = 7, Etot = -1.15455185 Ha, E < best_E : False
+Step = 8, Etot = -1.15529616 Ha, E < best_E : True
+Step = 9, Etot = -1.15558149 Ha, E < best_E : True
+Step = 10, Etot = -1.15559331 Ha, E < best_E : True
+Step = 11, Etot = -1.15600315 Ha, E < best_E : True
+Step = 12, Etot = -1.15598487 Ha, E < best_E : False
+Step = 13, Etot = -1.15611709 Ha, E < best_E : True
+Step = 14, Etot = -1.15626026 Ha, E < best_E : True
+Step = 15, Etot = -1.15629727 Ha, E < best_E : True
+Step = 16, Etot = -1.15636044 Ha, E < best_E : True
+Step = 17, Etot = -1.15642324 Ha, E < best_E : True
+Step = 18, Etot = -1.15646777 Ha, E < best_E : True
+Step = 19, Etot = -1.15650577 Ha, E < best_E : True
+Step = 20, Etot = -1.15654296 Ha, E < best_E : True
+Step = 21, Etot = -1.15657253 Ha, E < best_E : True
+Step = 22, Etot = -1.15660101 Ha, E < best_E : True
+Step = 23, Etot = -1.15662454 Ha, E < best_E : True
+Step = 24, Etot = -1.15664751 Ha, E < best_E : True
+Step = 25, Etot = -1.15666755 Ha, E < best_E : True
+Step = 26, Etot = -1.15668453 Ha, E < best_E : True
+Step = 27, Etot = -1.15670182 Ha, E < best_E : True
+Step = 28, Etot = -1.15671663 Ha, E < best_E : True
+Step = 29, Etot = -1.15673042 Ha, E < best_E : True
+Warning: orbital optimization did not fully converge
+Orbital optimization energy: -1.1567304174 Ha
+Updating initial parameters with optimal parameters [ 0.08178889  0.10137931  0.09583454  0.08228274  0.0823513   0.03168696
+ -0.01968237 -0.01968115 -0.01411836]
+
+==== SC-NOFVQE Iteration 1 ====
+Params is not none: [ 0.08178889  0.10137931  0.09583454  0.08228274  0.0823513   0.03168696
+ -0.01968237 -0.01968115 -0.01411836]
+VQE Optimization
+Step = 0, Energy = -1.16104896 Ha, Gradient = 2.3e-02
+Step = 1, Energy = -1.16035668 Ha, Gradient = 7.4e-02
+Step = 2, Energy = -1.16120658 Ha, Gradient = 5.5e-03
+Step = 3, Energy = -1.16121477 Ha, Gradient = 3.6e-03
+Step = 4, Energy = -1.16121849 Ha, Gradient = 2.2e-04
+Step = 5, Energy = -1.16121849 Ha, Gradient = 2.2e-04
+==== Hybrid mode deactivated ====
+Device:  simulator
+Opt_circ:  slsqp
+===============================
+Theta optimization VQE energy: -1.1612184897 Ha
+Orbital Optimization (ADAM)
+Step = 0, Etot = -1.15030587 Ha, E < best_E : False
+Step = 1, Etot = -1.16015872 Ha, E < best_E : False
+Step = 2, Etot = -1.15975898 Ha, E < best_E : False
+Step = 3, Etot = -1.15978675 Ha, E < best_E : False
+Step = 4, Etot = -1.16115879 Ha, E < best_E : False
+Step = 5, Etot = -1.16180185 Ha, E < best_E : True
+Step = 6, Etot = -1.16187945 Ha, E < best_E : True
+Step = 7, Etot = -1.16205610 Ha, E < best_E : True
+Step = 8, Etot = -1.16232430 Ha, E < best_E : True
+Step = 9, Etot = -1.16251412 Ha, E < best_E : True
+Step = 10, Etot = -1.16258140 Ha, E < best_E : True
+Step = 11, Etot = -1.16259609 Ha, E < best_E : True
+Step = 12, Etot = -1.16264782 Ha, E < best_E : True
+Step = 13, Etot = -1.16272627 Ha, E < best_E : True
+Step = 14, Etot = -1.16276764 Ha, E < best_E : True
+Step = 15, Etot = -1.16277554 Ha, E < best_E : True
+Step = 16, Etot = -1.16279126 Ha, E < best_E : True
+Step = 17, Etot = -1.16281391 Ha, E < best_E : True
+Step = 18, Etot = -1.16282538 Ha, E < best_E : True
+Step = 19, Etot = -1.16283059 Ha, E < best_E : True
+Step = 20, Etot = -1.16283805 Ha, E < best_E : True
+Step = 21, Etot = -1.16284513 Ha, E < best_E : True
+Step = 22, Etot = -1.16284973 Ha, E < best_E : True
+Step = 23, Etot = -1.16285310 Ha, E < best_E : True
+Step = 24, Etot = -1.16285563 Ha, E < best_E : True
+Step = 25, Etot = -1.16285776 Ha, E < best_E : True
+Step = 26, Etot = -1.16285985 Ha, E < best_E : True
+Step = 27, Etot = -1.16286146 Ha, E < best_E : True
+Step = 28, Etot = -1.16286261 Ha, E < best_E : True
+Step = 29, Etot = -1.16286368 Ha, E < best_E : True
+Warning: orbital optimization did not fully converge
+Orbital optimization energy: -1.1628636824 Ha
+Updating initial parameters with optimal parameters [ 0.01343586  0.11382453  0.16469206  0.08082506  0.08089102  0.02181067
+ -0.01852672 -0.01852759  0.00875161]
+
+==== SC-NOFVQE Iteration 2 ====
+Params is not none: [ 0.01343586  0.11382453  0.16469206  0.08082506  0.08089102  0.02181067
+ -0.01852672 -0.01852759  0.00875161]
+VQE Optimization
+Step = 0, Energy = -1.16327277 Ha, Gradient = 1.1e-02
+Step = 1, Energy = -1.16324193 Ha, Gradient = 1.9e-02
+Step = 2, Energy = -1.16331282 Ha, Gradient = 1.7e-03
+Step = 3, Energy = -1.16331389 Ha, Gradient = 9.4e-04
+Step = 4, Energy = -1.16331389 Ha, Gradient = 9.4e-04
+==== Hybrid mode deactivated ====
+Device:  simulator
+Opt_circ:  slsqp
+===============================
+Theta optimization VQE energy: -1.1633138888 Ha
+Orbital Optimization (ADAM)
+Step = 0, Etot = -1.14901576 Ha, E < best_E : False
+Step = 1, Etot = -1.16303514 Ha, E < best_E : False
+Step = 2, Etot = -1.16082643 Ha, E < best_E : False
+Step = 3, Etot = -1.15962445 Ha, E < best_E : False
+Step = 4, Etot = -1.16207044 Ha, E < best_E : False
+Step = 5, Etot = -1.16335416 Ha, E < best_E : True
+Step = 6, Etot = -1.16287075 Ha, E < best_E : False
+Step = 7, Etot = -1.16260039 Ha, E < best_E : False
+Step = 8, Etot = -1.16302796 Ha, E < best_E : False
+Step = 9, Etot = -1.16336721 Ha, E < best_E : True
+Step = 10, Etot = -1.16332237 Ha, E < best_E : False
+Step = 11, Etot = -1.16323127 Ha, E < best_E : False
+Step = 12, Etot = -1.16329068 Ha, E < best_E : False
+Step = 13, Etot = -1.16337963 Ha, E < best_E : True
+Step = 14, Etot = -1.16339106 Ha, E < best_E : True
+Step = 15, Etot = -1.16336810 Ha, E < best_E : False
+Step = 16, Etot = -1.16337131 Ha, E < best_E : False
+Step = 17, Etot = -1.16339150 Ha, E < best_E : True
+Step = 18, Etot = -1.16339924 Ha, E < best_E : True
+Step = 19, Etot = -1.16339506 Ha, E < best_E : False
+Step = 20, Etot = -1.16339368 Ha, E < best_E : False
+Step = 21, Etot = -1.16339757 Ha, E < best_E : False
+Step = 22, Etot = -1.16340033 Ha, E < best_E : True
+Step = 23, Etot = -1.16339992 Ha, E < best_E : False
+Step = 24, Etot = -1.16339926 Ha, E < best_E : False
+Step = 25, Etot = -1.16339985 Ha, E < best_E : False
+Step = 26, Etot = -1.16340061 Ha, E < best_E : True
+Step = 27, Etot = -1.16340070 Ha, E < best_E : True
+Step = 28, Etot = -1.16340052 Ha, E < best_E : False
+Step = 29, Etot = -1.16340058 Ha, E < best_E : False
+Warning: orbital optimization did not fully converge
+Orbital optimization energy: -1.1634006983 Ha
+Updating initial parameters with optimal parameters [ 0.01715165  0.11105316  0.19733833  0.08029639  0.08036068  0.02058992
+ -0.01815839 -0.01815913  0.00670651]
+
+==== SC-NOFVQE Iteration 3 ====
+Params is not none: [ 0.01715165  0.11105316  0.19733833  0.08029639  0.08036068  0.02058992
+ -0.01815839 -0.01815913  0.00670651]
+VQE Optimization
+Step = 0, Energy = -1.16340668 Ha, Gradient = 5.6e-03
+Step = 1, Energy = -1.16341328 Ha, Gradient = 7.3e-04
+Step = 2, Energy = -1.16341328 Ha, Gradient = 7.3e-04
+==== Hybrid mode deactivated ====
+Device:  simulator
+Opt_circ:  slsqp
+===============================
+Theta optimization VQE energy: -1.1634132770 Ha
+Orbital Optimization (ADAM)
+Step = 0, Etot = -1.15043206 Ha, E < best_E : False
+Step = 1, Etot = -1.16311285 Ha, E < best_E : False
+Step = 2, Etot = -1.16066106 Ha, E < best_E : False
+Step = 3, Etot = -1.16011040 Ha, E < best_E : False
+Step = 4, Etot = -1.16239508 Ha, E < best_E : False
+Step = 5, Etot = -1.16322232 Ha, E < best_E : False
+Step = 6, Etot = -1.16282828 Ha, E < best_E : False
+Step = 7, Etot = -1.16276599 Ha, E < best_E : False
+Step = 8, Etot = -1.16312178 Ha, E < best_E : False
+Step = 9, Etot = -1.16334467 Ha, E < best_E : False
+Step = 10, Etot = -1.16332301 Ha, E < best_E : False
+Step = 11, Etot = -1.16327824 Ha, E < best_E : False
+Step = 12, Etot = -1.16332361 Ha, E < best_E : False
+Step = 13, Etot = -1.16338858 Ha, E < best_E : False
+Step = 14, Etot = -1.16340226 Ha, E < best_E : False
+Step = 15, Etot = -1.16338795 Ha, E < best_E : False
+Step = 16, Etot = -1.16338984 Ha, E < best_E : False
+Step = 17, Etot = -1.16340565 Ha, E < best_E : False
+Step = 18, Etot = -1.16341301 Ha, E < best_E : False
+Step = 19, Etot = -1.16341023 Ha, E < best_E : False
+Step = 20, Etot = -1.16340895 Ha, E < best_E : False
+Step = 21, Etot = -1.16341204 Ha, E < best_E : False
+Step = 22, Etot = -1.16341445 Ha, E < best_E : True
+Step = 23, Etot = -1.16341429 Ha, E < best_E : False
+Step = 24, Etot = -1.16341379 Ha, E < best_E : False
+Step = 25, Etot = -1.16341422 Ha, E < best_E : False
+Step = 26, Etot = -1.16341483 Ha, E < best_E : True
+Step = 27, Etot = -1.16341496 Ha, E < best_E : True
+Step = 28, Etot = -1.16341485 Ha, E < best_E : False
+Step = 29, Etot = -1.16341487 Ha, E < best_E : False
+Warning: orbital optimization did not fully converge
+Orbital optimization energy: -1.1634149564 Ha
+Updating initial parameters with optimal parameters [ 0.01785439  0.11056844  0.20306327  0.08021561  0.08028052  0.02021691
+ -0.01778463 -0.01778521  0.00556977]
+
+==== SC-NOFVQE Iteration 4 ====
+Params is not none: [ 0.01785439  0.11056844  0.20306327  0.08021561  0.08028052  0.02021691
+ -0.01778463 -0.01778521  0.00556977]
+VQE Optimization
+Step = 0, Energy = -1.16341470 Ha, Gradient = 1.5e-03
+Step = 1, Energy = -1.16341505 Ha, Gradient = 6.8e-04
+==== Hybrid mode deactivated ====
+Device:  simulator
+Opt_circ:  slsqp
+===============================
+Theta optimization VQE energy: -1.1634150465 Ha
+Orbital Optimization (ADAM)
+Step = 0, Etot = -1.15161341 Ha, E < best_E : False
+Step = 1, Etot = -1.16247394 Ha, E < best_E : False
+Step = 2, Etot = -1.16075422 Ha, E < best_E : False
+Step = 3, Etot = -1.16083472 Ha, E < best_E : False
+Step = 4, Etot = -1.16223239 Ha, E < best_E : False
+Step = 5, Etot = -1.16299429 Ha, E < best_E : False
+Step = 6, Etot = -1.16292504 Ha, E < best_E : False
+Step = 7, Etot = -1.16290440 Ha, E < best_E : False
+Step = 8, Etot = -1.16314487 Ha, E < best_E : False
+Step = 9, Etot = -1.16327733 Ha, E < best_E : False
+Step = 10, Etot = -1.16330485 Ha, E < best_E : False
+Step = 11, Etot = -1.16332962 Ha, E < best_E : False
+Step = 12, Etot = -1.16334601 Ha, E < best_E : False
+Step = 13, Etot = -1.16336938 Ha, E < best_E : False
+Step = 14, Etot = -1.16339191 Ha, E < best_E : False
+Step = 15, Etot = -1.16339523 Ha, E < best_E : False
+Step = 16, Etot = -1.16339787 Ha, E < best_E : False
+Step = 17, Etot = -1.16340652 Ha, E < best_E : False
+Step = 18, Etot = -1.16340922 Ha, E < best_E : False
+Step = 19, Etot = -1.16340890 Ha, E < best_E : False
+Step = 20, Etot = -1.16341149 Ha, E < best_E : False
+Step = 21, Etot = -1.16341361 Ha, E < best_E : False
+Step = 22, Etot = -1.16341364 Ha, E < best_E : False
+Step = 23, Etot = -1.16341363 Ha, E < best_E : False
+Step = 24, Etot = -1.16341423 Ha, E < best_E : False
+Step = 25, Etot = -1.16341478 Ha, E < best_E : False
+Step = 26, Etot = -1.16341491 Ha, E < best_E : False
+Step = 27, Etot = -1.16341484 Ha, E < best_E : False
+Step = 28, Etot = -1.16341492 Ha, E < best_E : False
+Step = 29, Etot = -1.16341509 Ha, E < best_E : True
+Warning: orbital optimization did not fully converge
+Orbital optimization energy: -1.1634150886 Ha
+Updating initial parameters with optimal parameters [ 0.017817    0.110557    0.20306438  0.08021212  0.08027699  0.02020912
+ -0.01779529 -0.01779591  0.00547788]
+
+==== SC-NOFVQE Iteration 5 ====
+Params is not none: [ 0.017817    0.110557    0.20306438  0.08021212  0.08027699  0.02020912
+ -0.01779529 -0.01779591  0.00547788]
+VQE Optimization
+Step = 0, Energy = -1.16341509 Ha, Gradient = 7.2e-04
+==== Hybrid mode deactivated ====
+Device:  simulator
+Opt_circ:  slsqp
+===============================
+Theta optimization VQE energy: -1.1634150886 Ha
+Orbital Optimization (ADAM)
+Step = 0, Etot = -1.15119854 Ha, E < best_E : False
+Step = 1, Etot = -1.16275727 Ha, E < best_E : False
+Step = 2, Etot = -1.16107679 Ha, E < best_E : False
+Step = 3, Etot = -1.16025600 Ha, E < best_E : False
+Step = 4, Etot = -1.16229951 Ha, E < best_E : False
+Step = 5, Etot = -1.16334321 Ha, E < best_E : False
+Step = 6, Etot = -1.16287609 Ha, E < best_E : False
+Step = 7, Etot = -1.16272539 Ha, E < best_E : False
+Step = 8, Etot = -1.16314197 Ha, E < best_E : False
+Step = 9, Etot = -1.16338020 Ha, E < best_E : False
+Step = 10, Etot = -1.16332221 Ha, E < best_E : False
+Step = 11, Etot = -1.16326825 Ha, E < best_E : False
+Step = 12, Etot = -1.16332876 Ha, E < best_E : False
+Step = 13, Etot = -1.16339977 Ha, E < best_E : False
+Step = 14, Etot = -1.16340331 Ha, E < best_E : False
+Step = 15, Etot = -1.16338322 Ha, E < best_E : False
+Step = 16, Etot = -1.16339108 Ha, E < best_E : False
+Step = 17, Etot = -1.16340953 Ha, E < best_E : False
+Step = 18, Etot = -1.16341305 Ha, E < best_E : False
+Step = 19, Etot = -1.16340893 Ha, E < best_E : False
+Step = 20, Etot = -1.16340931 Ha, E < best_E : False
+Step = 21, Etot = -1.16341298 Ha, E < best_E : False
+Step = 22, Etot = -1.16341475 Ha, E < best_E : False
+Step = 23, Etot = -1.16341410 Ha, E < best_E : False
+Step = 24, Etot = -1.16341373 Ha, E < best_E : False
+Step = 25, Etot = -1.16341451 Ha, E < best_E : False
+Step = 26, Etot = -1.16341509 Ha, E < best_E : True
+Step = 27, Etot = -1.16341498 Ha, E < best_E : False
+Step = 28, Etot = -1.16341486 Ha, E < best_E : False
+Step = 29, Etot = -1.16341500 Ha, E < best_E : False
+Warning: orbital optimization did not fully converge
+Orbital optimization energy: -1.1634150903 Ha
+Updating initial parameters with optimal parameters [ 0.017817    0.110557    0.20306438  0.08021212  0.08027699  0.02020912
+ -0.01779529 -0.01779591  0.00547788]
+SC-NOFVQE converged (occupations)
+
+----------------
+ Final Energies 
+----------------
+       HF Total Energy =      -1.1287161
+Final NOF Total Energy =      -1.1634151
+    Correlation Energy =      -0.0346990
+
+
+Min Ene VQE and param: -1.1634150903060547 [ 0.017817    0.110557    0.20306438  0.08021212  0.08027699  0.02020912
+ -0.01779529 -0.01779591  0.00547788]
+ON [1.96638257e+00 1.58718489e-04 6.10471779e-03 2.04824741e-02
+ 3.17227023e-03 3.17229187e-03 2.00818836e-04 1.55696453e-04
+ 1.55694969e-04 1.47514877e-05]
