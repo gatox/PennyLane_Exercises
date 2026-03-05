@@ -278,6 +278,17 @@ class NOFVQE:
         self.nbeta = int(mol.n_electrons//2 - S_mult)
         self.nbf = self.norb
         self.no1 = 0
+        
+        # ---- Fortran NBF < NE condition ----
+        if self.nbf < self.n_elec:
+            ndif = self.n_elec - self.nbf
+            if self.no1 < ndif:
+                self.no1 = ndif
+                print("WARNING: NO1 increased to satisfy NBF >= NE condition")
+            if self.no1 == self.nbf:
+                raise RuntimeError("All orbitals excluded (NO1 == NBF).")
+        # ------------------------------------
+        
         self.ndoc = self.nbeta   -   self.no1
         self.nsoc = self.nalpha  -   self.nbeta
         self.ndns = self.ndoc    +   self.nsoc
@@ -298,6 +309,7 @@ class NOFVQE:
         self.nac = self.ndoc * (1 + self.ncwo)
         self.nbf5 = self.no1 + self.nac + self.nsoc   #JFHLY warning: nbf must be >nbf5 
         self.no0 = self.nbf - self.nbf5
+        self.noptorb = self.nbf
         self.nvar = int(self.nbf*(self.nbf-1)/2) - int(self.no0*(self.no0-1)/2)
         self.nv = self.ncwo*self.ndoc
         self.HighSpin = False
@@ -334,13 +346,13 @@ class NOFVQE:
     
     # ---------------- Computing the energy ----------------
     def ene_nof(self, params, rdm1=None):
+        
         E_nuc, J_MO, K_MO, H_core, n_elec, norb = self.E_nuc, self.J_MO, self.K_MO, self.H_core, self.n_elec, self.norb
         
         n, vecs, cj12, ck12, rdm1 = self._pnof(params, n_elec, norb, rdm1)
         
         E = self._calce(n,cj12,ck12,J_MO,K_MO,H_core)
-        #print("Energy VQE", E_nuc + E)
-        
+
         return E_nuc + E, rdm1, n, vecs, cj12, ck12
             
     # ---------------- Generate initial Parameters ----------------
@@ -427,27 +439,27 @@ class NOFVQE:
                 break
         return Omega
     
-    def _read_C_MO(self, C,S_ao,p):
-        # C is in NO basis
-        if C is None:
-            _, C = eigh(self.H_ao, S_ao)
-            C_old = C
-        else:
-            C_old_0 = np.copy(C)
-            C_old_1 = np.copy(C)
-            C_1 = np.copy(C)
-            for i in range(p.ndoc):
-                for j in range(p.ncwo):
-                    k = p.no1 + p.ndns + (p.ndoc - i - 1) * p.ncwo + j
-                    l = p.no1 + p.ndns + (p.ndoc - i - 1) + j*p.ndoc
-                    C[:,k] = C_old_0[:,l]
-                    C_1[:,l] = C_old_1[:,k]
-            if not self.pair_doubles:
-                np.save(p.title+"_C.npy",C_1)
-                print(f"saving {p.title}C.npy")
-            C_old = C
-        C_old = pynof.check_ortho(C_old,S_ao,p)
-        return C_old
+    # def _read_C_MO(self, C,S_ao,p):
+    #     # C is in NO basis
+    #     if C is None:
+    #         _, C = eigh(self.H_ao, S_ao)
+    #         C_old = C
+    #     else:
+    #         C_old_0 = np.copy(C)
+    #         C_old_1 = np.copy(C)
+    #         C_1 = np.copy(C)
+    #         for i in range(p.ndoc):
+    #             for j in range(p.ncwo):
+    #                 k = p.no1 + p.ndns + (p.ndoc - i - 1) * p.ncwo + j
+    #                 l = p.no1 + p.ndns + (p.ndoc - i - 1) + j*p.ndoc
+    #                 C[:,k] = C_old_0[:,l]
+    #                 C_1[:,l] = C_old_1[:,k]
+    #         if not self.pair_doubles:
+    #             np.save(p.title+"_C.npy",C_1)
+    #             print(f"saving {p.title}C.npy")
+    #         C_old = C
+    #     C_old = pynof.check_ortho(C_old,S_ao,p)
+    #     return C_old
     
     def _JKH_MO_Full(self, C,H,I):
         #denmatj
@@ -494,22 +506,22 @@ class NOFVQE:
         if(self.MSpin==0):
             # 2ndH/dy_ab
             
-            #elag[:,:self.nbf5] +=  jnp.einsum('b,ab->ab',n,H_mat[:,:self.nbf5],optimize=True)
-            elag[:,:self.nbf5] +=  jnp.einsum('b,ab->ab',n[:self.nbf5],H_mat[:,:self.nbf5],optimize=True)
+            elag[:,:self.nbf5] +=  jnp.einsum('b,ab->ab',n,H_mat[:,:self.nbf5],optimize=True)
+            #elag[:,:self.nbf5] +=  jnp.einsum('b,ab->ab',n[:self.nbf5],H_mat[:,:self.nbf5],optimize=True)
 
             # dJ_pp/dy_ab
             elag[:,:self.nbeta] +=  jnp.einsum('b,abbb->ab',n[:self.nbeta],I_MO[:,:self.nbeta,:self.nbeta,:self.nbeta],optimize=True)
             elag[:,self.nalpha:self.nbf5] +=  jnp.einsum('b,abbb->ab',n[self.nalpha:self.nbf5],I_MO[:,self.nalpha:self.nbf5,self.nalpha:self.nbf5,self.nalpha:self.nbf5],optimize=True)
             
             # C^J_pq dJ_pq/dy_ab 
-            #elag[:,:self.nbf5] +=  jnp.einsum('bq,abqq->ab',cj12,I_MO[:,:self.nbf5,:self.nbf5,:self.nbf5],optimize=True)
-            elag[:,:self.nbf5] +=  jnp.einsum('bq,abqq->ab',cj12[:self.nbf5,:self.nbf5],I_MO[:,:self.nbf5,:self.nbf5,:self.nbf5],optimize=True)
+            elag[:,:self.nbf5] +=  jnp.einsum('bq,abqq->ab',cj12,I_MO[:,:self.nbf5,:self.nbf5,:self.nbf5],optimize=True)
+            #elag[:,:self.nbf5] +=  jnp.einsum('bq,abqq->ab',cj12[:self.nbf5,:self.nbf5],I_MO[:,:self.nbf5,:self.nbf5,:self.nbf5],optimize=True)
 
             # -C^K_pq dK_pq/dy_ab 
-            #elag[:,:self.nbf5] += -jnp.einsum('bq,aqbq->ab',ck12,I_MO[:,:self.nbf5,:self.nbf5,:self.nbf5],optimize=True)
-            elag[:,:self.nbf5] += -jnp.einsum('bq,aqbq->ab',ck12[:self.nbf5,:self.nbf5],I_MO[:,:self.nbf5,:self.nbf5,:self.nbf5],optimize=True)
+            elag[:,:self.nbf5] += -jnp.einsum('bq,aqbq->ab',ck12,I_MO[:,:self.nbf5,:self.nbf5,:self.nbf5],optimize=True)
+            #elag[:,:self.nbf5] += -jnp.einsum('bq,aqbq->ab',ck12[:self.nbf5,:self.nbf5],I_MO[:,:self.nbf5,:self.nbf5,:self.nbf5],optimize=True)
         else:
-            print("MSpin must be zero")
+            raise RuntimeError("MSpin != 0 is not implemented yet")
         return elag, H_mat
     
     def _rotate_orbital_pennylane(self, y,C):
@@ -526,7 +538,6 @@ class NOFVQE:
         U = expm(ynew)
         Cnew = jnp.einsum("mr,rp->mp",C,U,optimize=True)
 
-        #breakpoint()
         return Cnew
     
     def _calcorbe_pennylane(self, y,n,cj12,ck12,C,H,I):
@@ -540,7 +551,6 @@ class NOFVQE:
     def _orbopt_adam(self, n,cj12,ck12,C,H,I):
         y = np.zeros((self.nvar))
         E = self._calcorbe_pennylane(y, n,cj12,ck12,C,H,I)
-        #breakpoint()
         
         alpha = self.alpha
         beta1 = 0.7
@@ -556,12 +566,10 @@ class NOFVQE:
         success = False
         best_E, best_C = E, C
         nit = 0
-        print("Nit_orb"," ","Etot"," ", "Eelec < best_Eelec")
         for i in range(self.maxloop):
             nit += 1
             
             grad = self._calcorbg_pennylane(y*0, n,cj12,ck12,C,H,I)
-            #print("GRAD:",grad)
             if np.linalg.norm(grad) < 10**-4 and improved:
                 success = True
                 break
@@ -572,11 +580,9 @@ class NOFVQE:
             vhat = v / (1.0 - beta2**(i+1))
             vhat_max = np.maximum(vhat_max, vhat)
             y = - alpha * mhat / (jnp.sqrt(vhat_max + 10**-8)) #AMSgrad
-            #print("Rotation y after compute it:",y)
             C = self._rotate_orbital_pennylane(y,C)
             
             E = self._calcorbe_pennylane(y*0, n,cj12,ck12,C,H,I)
-            #print(i," ",self.E_nuc+E," ", E < best_E)
             print(f"Step = {i}, "
                     f"Etot = {float(self.E_nuc+E):.8f} Ha, "
                     f"E < best_E : {E < best_E}")
@@ -588,7 +594,7 @@ class NOFVQE:
         if not improved:
             self.alpha = self.alpha/10
             self.maxloop = self.maxloop + 30
-            #print("      alpha ",p.alpha)
+            #print("      alpha ",self.alpha)
         
         return best_E,best_C,nit,success
         
@@ -610,6 +616,98 @@ class NOFVQE:
         self.C_AO_MO = C_new
 
         return E_orb, C_new
+    
+    def computeF_RC_CPU(self, J,K,n,H,cj12,ck12):
+
+        # Matriz de Fock Generalizada
+        F = jnp.zeros((self.nbf5,self.nbf,self.nbf))
+
+        ini = 0
+        if(self.no1>1):
+            ini = self.no1
+
+        # nH
+        F += jnp.einsum('i,mn->imn',n,H,optimize=True)        # i = [1,nbf5]
+
+        # # nJ
+        
+        # F[ini:self.nbeta,:,:] += jnp.einsum('i,imn->imn',n[ini:self.nbeta],J[ini:self.nbeta,:,:],optimize=True)        # i = [ini,nbeta]
+        # F[self.nalpha:self.nbf5,:,:] += jnp.einsum('i,imn->imn',n[self.nalpha:self.nbf5],J[self.nalpha:self.nbf5,:,:],optimize=True)  # i = [nalpha,nbf5]
+
+        # nJ
+        F = F.at[ini:self.nbeta,:,:].add(
+            jnp.einsum('i,imn->imn', n[ini:self.nbeta], J[ini:self.nbeta,:,:], optimize=True)
+        )
+
+        F = F.at[self.nalpha:self.nbf5,:,:].add(
+            jnp.einsum('i,imn->imn', n[self.nalpha:self.nbf5], J[self.nalpha:self.nbf5,:,:], optimize=True)
+        )
+        
+        # ---- Remove diagonal of cj12 block ----
+        sub = cj12[ini:, ini:]
+        sub = sub - jnp.diag(jnp.diag(sub))
+        cj12 = cj12.at[ini:, ini:].set(sub)
+        # C^J J
+        F += jnp.einsum('ij,jmn->imn',cj12,J,optimize=True)                                                # i = [1,nbf5]
+        #F[ini:self.nbf5,:,:] -= jnp.einsum('ii,imn->imn',cj12[ini:self.nbf5,ini:self.nbf5],J[ini:self.nbf5,:,:],optimize=True) # quita i==j
+
+        
+        # ---- Remove diagonal of ck12 block ----
+        sub = ck12[ini:, ini:]
+        sub = sub - jnp.diag(jnp.diag(sub))
+        ck12 = ck12.at[ini:, ini:].set(sub)
+        # -C^K K
+        F -= jnp.einsum('ij,jmn->imn',ck12,K,optimize=True)                                                # i = [1,nbf5]
+        #F[ini:self.nbf5,:,:] += jnp.einsum('ii,imn->imn',ck12[ini:self.nbf5,ini:self.nbf5],K[ini:self.nbf5,:,:],optimize=True) # quita i==j
+
+        return F
+    
+    def JKj_Full(self, C,I):
+        #denmatj
+        D = jnp.einsum('mi,ni->imn', C[:,0:self.nbf5], C[:,0:self.nbf5], optimize=True)
+        #hstarj
+        J = jnp.tensordot(D, I, axes=([1,2],[2,3]))
+        #hstark
+        K = jnp.tensordot(D, I, axes=([1,2],[1,3]))
+        
+        return J,K
+    
+    def computeLagrange(self, F,C):
+
+        G = jnp.einsum('imn,ni->mi',F,C[:,0:self.nbf5],optimize=True)
+
+        #Compute Lagrange multipliers
+        elag = jnp.zeros((self.nbf,self.nbf))
+        elag = elag.at[0:self.noptorb,0:self.nbf5].add(
+            jnp.einsum('mi,mj->ij',C[:,0:self.noptorb],G,optimize=True)[0:self.noptorb,0:self.nbf5]
+        )
+        
+        # elag[0:self.noptorb,0:self.nbf5] = jnp.einsum('mi,mj->ij',C[:,0:self.noptorb],G,optimize=True)[0:self.noptorb,0:self.nbf5]
+
+        return elag
+    
+    def computeE_elec(self, H,C,n,elag):
+        #EELECTRr
+        E = 0
+
+        E = E + jnp.einsum('ii',elag[:self.nbf5,:self.nbf5],optimize=True)
+        E = E + jnp.einsum('i,mi,mn,ni',n[:self.nbeta],C[:,:self.nbeta],H,C[:,:self.nbeta],optimize=True)
+        if(not self.HighSpin):
+            E = E + jnp.einsum('i,mi,mn,ni',n[self.nbeta:self.nalpha],C[:,self.nbeta:self.nalpha],H,C[:,self.nbeta:self.nalpha],optimize=True)
+        elif(self.HighSpin):
+            E = E + 0.5*jnp.einsum('mi,mn,ni',C[:,self.nbeta:self.nalpha],H,C[:,self.nbeta:self.nalpha],optimize=True)
+
+        E = E + jnp.einsum('i,mi,mn,ni',n[self.nalpha:self.nbf5],C[:,self.nalpha:self.nbf5],H,C[:,self.nalpha:self.nbf5],optimize=True)
+
+        return E
+    
+    def computeLagrangeConvergency(self, elag):
+        # Convergency
+
+        sumdiff = np.sum(np.abs(elag-elag.T))
+        maxdiff = np.max(np.abs(elag-elag.T))
+
+        return sumdiff,maxdiff
 
     def ENERGY1r(self, C,n,H,I,cj12,ck12):
         if(self.no1==0):
@@ -617,8 +715,17 @@ class NOFVQE:
             E = jnp.einsum('ii',elag[:self.nbf5,:self.nbf5],optimize=True)
             E = E + jnp.einsum('i,ii',n[:self.nbf5],Hmat[:self.nbf5,:self.nbf5],optimize=True)
         else:
-            print("Not implemented yet for no1!=0")
-        return E,elag
+            J,K = self.JKj_Full(C,I)
+            if(self.MSpin==0):
+                F = self.computeF_RC_CPU(J,K,n,H,cj12,ck12)
+            elif(not self.MSpin==0):
+                raise RuntimeError("MSpin != 0 is not implemented yet")
+            elag = self.computeLagrange(F,C)
+            E = self.computeE_elec(H,C,n,elag)
+
+        sumdiff,maxdiff = self.computeLagrangeConvergency(elag)
+        
+        return E,elag,sumdiff,maxdiff
     
     def run_scnofvqe(self, max_outer=30, tol=1e-6):
         """
@@ -657,9 +764,6 @@ class NOFVQE:
         
         for it in range(max_outer):
             print(f"\n==== SC-NOFVQE Iteration {it} ====")
-
-            
-            #self.E_nuc, self.h_MO, self.I_MO, self.n_elec, self.norb, self.C_MO = self._mo_integrals(self.crd, C_MO=C_MO)
             
             # 1. Initial contions to perform optimization
             self.init_param = self._initial_params(init_param)
@@ -671,7 +775,6 @@ class NOFVQE:
             print("VQE Optimization")
             E_vqe, params, rdm1, n, vecs, cj12, ck12 = self.ene_vqe(self.init_param)
             print(f"Theta optimization VQE energy: {E_vqe:.10f} Ha")
-            #breakpoint()
             
             # 4. Orbital optimization
             print("Orbital Optimization (ADAM)")
@@ -692,7 +795,8 @@ class NOFVQE:
             E_orb_old = E_orb
             self.C_AO_MO = C_new
             C_MO = C_new
-        E, _ = self.ENERGY1r(C_new,n,H,I,cj12,ck12)
+        #breakpoint()
+        E, _, _, _ = self.ENERGY1r(C_new,n,H,I,cj12,ck12)
         self.init_param = init_param
         print("")
 
@@ -706,150 +810,7 @@ class NOFVQE:
         print("")
         
         return self.E_nuc + E, params, rdm1, n, vecs, cj12, ck12, C_new
-    
-    def run_scnofvqe_1(self, max_outer=30, tol=1e-3):
-        """
-        Self-consistent NOF-VQE loop:
-        VQE amplitudes <-> orbital optimization
-        """
-        E_old = None
-        E_orb_old = None
-        rdm1 = None
 
-        # Initial orbitals
-        C_MO = self.C_AO_MO if self.C_AO_MO is not None else None
-        init_param = self.init_param
-        
-        for it in range(max_outer):
-            print(f"\n==== SC-NOFVQE Iteration {it} ====")
-
-            # 1. Build integrals with scf current orbitals
-            self.E_nuc, self.h_MO, self.I_MO, self.n_elec, self.norb, self.C_MO = self._mo_integrals(self.crd, C_MO=C_MO)
-        
-            self.init_param = self._initial_params(init_param)
-
-            # 2. Run VQE (pair-only)
-            E, params, rdm1, n, vecs, cj12, ck12 = self.ene_vqe(self.init_param, rdm1, self.C_MO)
-            
-            # 3. Pre-rotate orbitals if needed
-            if (vecs == np.eye(vecs.shape[0])).all():
-                C_start = self.C_MO
-            else:
-                C_start = vecs
-            
-            print("Updating initial parameters with optimal parameters",params)
-            init_param = params
-            print(f"VQE energy: {E:.10f} Ha")
-            
-            # 4. Orbital optimization
-            E_orb, C_new = self._orbital_optimization(n, cj12,ck12, C_start)
-            print(f"Orbital optimization energy: {E_orb:.10f} Ha")
-            
-            # Convergence check (VQE and Orbital energy)
-            if E_orb_old is not None:
-                if abs(E - E_old) < tol and abs(E_orb - E_orb_old) < tol:
-                    print("SC-NOFVQE converged (occupations)")
-                    break
-            E_old = E
-            E_orb_old = E_orb
-            self.C_AO_MO = C_new
-            C_MO = C_new
-
-        self.init_param = init_param
-        return E, params, rdm1, n, vecs, cj12, ck12
-
-    
-    # ---------- integrals at a geometry (MO basis) from pennylane ----------
-    # def _mo_integrals_pennylane(self, crd, C_MO, lagrange2=False):
-    #     """Return (E_nuc, h_MO, I_MO, n_electrons, norb) at given geometry (bohr)."""
-    #     mol = qml.qchem.Molecule(symbols = self.symbols, 
-    #                              coordinates = crd, 
-    #                              charge = self.charge, 
-    #                              mult = self.mul, 
-    #                              basis_name = self.basis, 
-    #                              unit = self.units)
-    #     if C_MO is None:
-    #         """C_MO from scf pennylane as initial guess"""
-    #         print("C_MO from scf pennylane as initial guess")
-    #         _, coeffs, _, h_core, rep_tensor = qml.qchem.scf(mol)()
-    #         E_HF =qml.qchem.hf_energy(mol)()
-    #         print("Energy HF:",E_HF)
-    #        #breakpoint()
-            
-    #         C_MO = coeffs
-    #         h_MO = qml.math.einsum("qr,rs,st->qt", C_MO.T, h_core, C_MO)
-    #         I_MO = qml.math.swapaxes(
-    #             qml.math.einsum(
-    #                 "ab,cd,bdeg,ef,gh->acfh", C_MO.T, C_MO.T, rep_tensor, C_MO, C_MO
-    #             ),
-    #             1,
-    #             3,
-    #         )
-    #     elif lagrange2:
-    #         _, _, _, h_core, rep_tensor = qml.qchem.scf(mol)()
-    #         """C_MO from MO optimization to the lagrange2"""
-    #         #print("C_MO from MO optimization to the lagrange2")
-    #         h_MO = qml.math.einsum("rq,rs,st->qt", C_MO, h_core, C_MO[:,:self.nbf5])
-    #         I_MO = qml.math.swapaxes(
-    #             qml.math.einsum(
-    #                 "ba,dc,bdeg,ef,gh->acfh", C_MO, C_MO[:,:self.nbf5], rep_tensor, C_MO[:,:self.nbf5], C_MO[:,:self.nbf5]
-    #             ),
-    #             1,
-    #             3,
-    #         )
-            
-    #     else:
-    #         _, _, _, h_core, rep_tensor = qml.qchem.scf(mol)()
-    #         """C_MO from MO optimization"""
-    #         #print("C_MO from MO optimization")
-    #         h_MO = qml.math.einsum("qr,rs,st->qt", C_MO.T, h_core, C_MO)
-    #         I_MO = qml.math.swapaxes(
-    #             qml.math.einsum(
-    #                 "ab,cd,bdeg,ef,gh->acfh", C_MO.T, C_MO.T, rep_tensor, C_MO, C_MO
-    #             ),
-    #             1,
-    #             3,
-    #         )
-        
-    #     core = qml.qchem.nuclear_energy(mol.nuclear_charges, mol.coordinates)()
-        
-    #     E_nuc = core[0]
-    #     n_elec = mol.n_electrons
-    #     self.n_elec = n_elec
-    #     norb = mol.n_orbitals
-    #     S = (mol.mult - 1) / 2
-    #     self.nalpha = int(mol.n_electrons//2 + S)
-    #     self.nbeta = int(mol.n_electrons//2 - S)
-    #     self.nbf = norb
-    #     self.no1 = 0
-    #     self.ndoc = self.nbeta   -   self.no1
-    #     self.nsoc = self.nalpha  -   self.nbeta
-    #     self.ndns = self.ndoc    +   self.nsoc
-    #     self.nvir = self.nbf     -   self.nalpha
-    #     self.ncwo = -1
-    #     if(self.n_elec==2):
-    #         self.ncwo= -1
-    #     if(self.ndns!=0):
-    #         if(self.ndoc>0):
-    #             if(self.ncwo!=1):
-    #                 if(self.ncwo==-1 or self.ncwo > self.nvir/self.ndoc):
-    #                     self.ncwo = int(self.nvir/self.ndoc)
-    #         else:
-    #             self.ncwo = 0
-
-    #     self.closed = (self.nbeta == (self.n_elec+self.mul-1)/2 and self.nalpha == (self.n_elec-self.mul+1)/2)
-        
-    #     self.nac = self.ndoc * (1 + self.ncwo)
-    #     self.nbf5 = self.no1 + self.nac + self.nsoc   #JFHLY warning: nbf must be >nbf5 
-    #     self.no0 = self.nbf - self.nbf5
-    #     self.nvar = int(self.nbf*(self.nbf-1)/2) - int(self.no0*(self.no0-1)/2)
-    #     self.nv = self.ncwo*self.ndoc
-    #     #norb = int(h_MO.shape[0])
-    #     self.HighSpin = False
-    #     self.MSpin = 0
-    #     self.alpha = 0.02
-    #     return jnp.array(E_nuc), jnp.array(h_MO), jnp.array(I_MO), n_elec, norb, C_MO
-    
     # ---------- integrals at a geometry (MO basis) from pynof ----------    
     def _mo_integrals_pynof(self):
         mol_local = self.mol
@@ -1113,8 +1074,8 @@ class NOFVQE:
         
         if(self.MSpin==0):
             # 2H + J
-            #E = E + 2*jnp.einsum('i,i',n,H_core,optimize=True)
-            E = E + 2*jnp.einsum('i,i',n[:self.nbf5],H_core,optimize=True)
+            E = E + 2*jnp.einsum('i,i',n,H_core,optimize=True)
+            #E = E + 2*jnp.einsum('i,i',n[:self.nbf5],H_core,optimize=True)
             
             E = E + jnp.einsum('i,i',n[:self.nbeta],jnp.diagonal(J_MO)[:self.nbeta],optimize=True)
             E = E + jnp.einsum('i,i',n[self.nalpha:self.nbf5],jnp.diagonal(J_MO)[self.nalpha:self.nbf5],optimize=True)
@@ -1671,7 +1632,6 @@ if __name__ == "__main__":
     # E_nuc, h_MO, I_MO, n_elec, norb, C_MO = cal._mo_integrals_pennylane(cal.crd, C_MO=C_MO)
     # breakpoint()
     if pair_double:
-        #E_min, params_opt, rdm1_opt, n, vecs, cj12, ck12 = cal.run_scnofvqe_1()
         E_min, params_opt, rdm1_opt, n, vecs, cj12, ck12, C_opt = cal.run_scnofvqe()
         print("Min Ene VQE and param:", E_min, params_opt)
         print("ON",2*n)
