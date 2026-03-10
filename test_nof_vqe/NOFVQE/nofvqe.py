@@ -149,7 +149,7 @@ class NOFVQE:
         self.basis = basis
         self.functional = functional
         self.ipnof = None
-        if functional in ["pnof4","pnof5"]:
+        if functional in ["pnof4","pnof5","pnof7","pnof8"]:
             self.ipnof = self._func_indix(functional)
         self.conv_tol = conv_tol
         self.max_iterations = max_iterations
@@ -188,7 +188,7 @@ class NOFVQE:
             self.optimization_level = optimization_level
             self.resilience_level = resilience_level
         self.opt_circ = opt_circ
-        if self.functional not in ["pnof4","pnof5"]:
+        if self.functional not in ["pnof4","pnof5","pnof7","pnof8"]:
             self.pl_mol = qml.qchem.Molecule(
             symbols=self.symbols,
             coordinates=self.crd,
@@ -305,6 +305,10 @@ class NOFVQE:
 
         self.closed = (self.nbeta == (self.n_elec+self.mul-1)/2 and self.nalpha == (self.n_elec-self.mul+1)/2)
         
+        self.ista = 0 #Use Static version of PNOF7: 0 = PNOF7 (Default), 1 = PNOF7s
+        
+        self.imod = 0 #Select versions of GNOFx: 0 = GNOF (Default), 1 = GNOFm, 2 = GNOFs
+        
         self.nac = self.ndoc * (1 + self.ncwo)
         self.nbf5 = self.no1 + self.nac + self.nsoc   #JFHLY warning: nbf must be >nbf5 
         self.no0 = self.nbf - self.nbf5
@@ -339,6 +343,16 @@ class NOFVQE:
                 n, vecs, cj12, ck12, rdm1 = self._pnof5(params, n_elec, norb, rdm1)
             else:
                 raise ValueError(f"Pair_doubles must be True for pnof5")
+        elif self.ipnof == 7:
+            if self.pair_doubles:
+                n, vecs, cj12, ck12, rdm1 = self._pnof7(params, n_elec, norb, rdm1)
+            else:
+                raise ValueError(f"Pair_doubles must be True for pnof8") 
+        elif self.ipnof == 8:
+            if self.pair_doubles:
+                n, vecs, cj12, ck12, rdm1 = self._pnof8(params, n_elec, norb, rdm1)
+            else:
+                raise ValueError(f"Pair_doubles must be True for pnof8")  
         else:
             raise ValueError(f"Unsupported PNOF level: {self.ipnof}")
         return n, vecs, cj12, ck12, rdm1
@@ -437,28 +451,6 @@ class NOFVQE:
                 Omega.append([ul-1]+[ul])
                 break
         return Omega
-    
-    # def _read_C_MO(self, C,S_ao,p):
-    #     # C is in NO basis
-    #     if C is None:
-    #         _, C = eigh(self.H_ao, S_ao)
-    #         C_old = C
-    #     else:
-    #         C_old_0 = np.copy(C)
-    #         C_old_1 = np.copy(C)
-    #         C_1 = np.copy(C)
-    #         for i in range(p.ndoc):
-    #             for j in range(p.ncwo):
-    #                 k = p.no1 + p.ndns + (p.ndoc - i - 1) * p.ncwo + j
-    #                 l = p.no1 + p.ndns + (p.ndoc - i - 1) + j*p.ndoc
-    #                 C[:,k] = C_old_0[:,l]
-    #                 C_1[:,l] = C_old_1[:,k]
-    #         if not self.pair_doubles:
-    #             np.save(p.title+"_C.npy",C_1)
-    #             print(f"saving {p.title}C.npy")
-    #         C_old = C
-    #     C_old = pynof.check_ortho(C_old,S_ao,p)
-    #     return C_old
     
     def _JKH_MO_Full(self, C,H,I):
         #denmatj
@@ -798,13 +790,13 @@ class NOFVQE:
             # Convergence check (VQE and Orbital energy)
             if E_orb_old is not None:
                 if abs(E_vqe - E_old) < tol and abs(E_orb - E_orb_old) < tol:
-                    print("SC-NOFVQE converged (occupations)")
+                    print("SC-NOFVQE converged (occupations + MO)")
                     break
             E_old = E_vqe
             E_orb_old = E_orb
             self.C_AO_MO = C_new
             C_MO = C_new
-        #breakpoint()
+            
         E, _, _, _ = self.ENERGY1r(C_new,n,H,I,cj12,ck12)
         self.init_param = init_param
         print("")
@@ -1053,6 +1045,9 @@ class NOFVQE:
         # --- Build CJ and CK (PNOF5) ---
         cj12 = 2.0 * jnp.outer(n, n)
         ck12 = jnp.outer(n, n)
+        
+        if(self.MSpin==0 and self.nsoc>1):
+            ck12 = ck12.at[self.nbeta:self.nalpha,self.nbeta:self.nalpha].set(2*jnp.outer(n[self.nbeta:self.nalpha],n[self.nbeta:self.nalpha]))
 
         # Pair structure (Ω_g)
         for l in range(self.ndoc):
@@ -1076,6 +1071,176 @@ class NOFVQE:
             ck12 = ck12.at[ll:ul,ll:ul].set(
                 -jnp.sqrt(jnp.outer(n_weak, n_weak))
             )
+        return n, vecs, cj12, ck12, rdm1
+    
+    def _pnof7(self, params, n_elec, norb, rdm1=None):
+        if rdm1 is None:
+            rdm1 = self._rdm1_from_circuit(params, n_elec, norb)
+
+        # Natural occupations and orbitals
+        n, vecs = self._get_no_on(rdm1, norb, self.pair_doubles)
+        
+        if self.pair_doubles:
+            assert n.ndim == 1, f"Occupation numbers have wrong shape {n.shape}"
+            assert vecs.ndim == 2, f"Orbital matrix has wrong shape {vecs.shape}"
+
+        if(self.ista==0):
+            fi = n*(1-n)
+            fi = fi.at[fi <= 0].set(0)
+            fi = jnp.sqrt(fi)      
+        else:
+            fi = 2*n*(1-n)
+        
+        # --- Build CJ and CK (PNOF7) ---
+        cj12 = 2.0 * jnp.outer(n, n)
+        ck12 = jnp.outer(n, n) + jnp.outer(fi,fi)
+        
+        # Intrapair Electron Correlation
+        
+        if(self.MSpin==0 and self.nsoc>1):
+            ck12 = ck12.at[self.nbeta:self.nalpha,self.nbeta:self.nalpha].set(2*jnp.outer(n[self.nbeta:self.nalpha],n[self.nbeta:self.nalpha]))
+
+        # Pair structure (Ω_g)
+        for l in range(self.ndoc):
+            ldx = self.no1 + l         
+            # inicio y fin de los orbitales acoplados a los fuertemente ocupados
+            ll = self.no1 + self.ndns + (self.ndoc - l - 1)*self.ncwo
+            ul = ll + self.ncwo
+
+            n_strong = n[ldx]
+            n_weak = n[ll:ul]
+
+            # Remove Coulomb intra-pair
+            cj12 = cj12.at[ldx,ll:ul].set(0.0)
+            cj12 = cj12.at[ll:ul,ldx].set(0.0)
+            cj12 = cj12.at[ll:ul,ll:ul].set(0.0)
+
+            # Exchange terms
+            ck12 = ck12.at[ldx,ll:ul].set(jnp.sqrt(n_strong * n_weak))
+            ck12 = ck12.at[ll:ul,ldx].set(jnp.sqrt(n_strong * n_weak))
+            ck12 = ck12.at[ll:ul,ll:ul].set(
+                -jnp.sqrt(jnp.outer(n_weak, n_weak))
+            )
+        return n, vecs, cj12, ck12, rdm1
+    
+    def _pnof8(self, params, n_elec, norb, rdm1=None):
+        if rdm1 is None:
+            rdm1 = self._rdm1_from_circuit(params, n_elec, norb)
+
+        # Natural occupations and orbitals
+        n, vecs = self._get_no_on(rdm1, norb, self.pair_doubles)
+
+        # ----- PNOF8 auxiliary occupations -----
+        h_cut = 0.02 * jnp.sqrt(2.0)
+        n_d = jnp.zeros_like(n)
+
+        for i in range(self.ndoc):
+
+            idx = self.no1 + i
+            ll = self.no1 + self.ndns + (self.ndoc - i - 1) * self.ncwo
+            ul = ll + self.ncwo
+
+            n_strong = n[idx]
+            n_weak = n[ll:ul]
+
+            h = 1.0 - n_strong
+            coc = h / h_cut
+            F = jnp.exp(-(coc**2))
+
+            n_d = n_d.at[idx].set(n_strong * F)
+            n_d = n_d.at[ll:ul].set(n_weak * F)
+
+        n_d12 = jnp.sqrt(n_d)
+        fi = n * (1 - n)
+        fi = fi.at[fi <= 0].set(0)
+        fi = jnp.sqrt(fi)
+        
+        # ----- Interpair Electron Correlation -----
+
+        cj12 = 2.0 * jnp.outer(n, n)
+        
+        if self.ista == 0:
+            ck12 = jnp.outer(n, n)
+
+            ck12 = ck12.at[self.no1:self.nbeta, self.nalpha:].add(
+                jnp.outer(fi[self.no1:self.nbeta], fi[self.nalpha:])
+            )
+
+            ck12 = ck12.at[self.nalpha:, self.no1:self.nbeta].add(
+                jnp.outer(fi[self.nalpha:], fi[self.no1:self.nbeta])
+            )
+
+            ck12 = ck12.at[self.nalpha:, self.nalpha:].add(
+                jnp.outer(fi[self.nalpha:], fi[self.nalpha:])
+            )
+
+            # ----- Intrapair Electron Correlation -----
+
+            if self.MSpin == 0 and self.nsoc > 0:
+
+                half = jnp.full((self.nsoc,), 0.5)
+
+                ck12 = ck12.at[self.no1:self.nbeta, self.nbeta:self.nalpha].add(
+                    0.5 * jnp.outer(fi[self.no1:self.nbeta], half)
+                )
+
+                ck12 = ck12.at[self.nbeta:self.nalpha, self.no1:self.nbeta].add(
+                    0.5 * jnp.outer(half, fi[self.no1:self.nbeta])
+                )
+
+                ck12 = ck12.at[self.nbeta:self.nalpha, self.nalpha:].add(
+                    jnp.outer(half, fi[self.nalpha:])
+                )
+
+                ck12 = ck12.at[self.nalpha:, self.nbeta:self.nalpha].add(
+                    jnp.outer(fi[self.nalpha:], half)
+                )
+
+            if self.MSpin == 0 and self.nsoc > 1:
+                ck12 = ck12.at[self.nbeta:self.nalpha, self.nbeta:self.nalpha].set(0.5)
+        else:
+            ck12 = jnp.outer(n,n) + jnp.outer(fi,fi)
+        # ----- dynamic correlation terms -----
+
+        ck12 = ck12.at[self.no1:self.nbeta, self.nalpha:].add(
+            jnp.outer(n_d12[self.no1:self.nbeta], n_d12[self.nalpha:])
+            - jnp.outer(n_d[self.no1:self.nbeta], n_d[self.nalpha:])
+        )
+
+        ck12 = ck12.at[self.nalpha:, self.no1:self.nbeta].add(
+            jnp.outer(n_d12[self.nalpha:], n_d12[self.no1:self.nbeta])
+            - jnp.outer(n_d[self.nalpha:], n_d[self.no1:self.nbeta])
+        )
+
+        ck12 = ck12.at[self.nalpha:, self.nalpha:].add(
+            -jnp.outer(n_d12[self.nalpha:], n_d12[self.nalpha:])
+            - jnp.outer(n_d[self.nalpha:], n_d[self.nalpha:])
+        )
+
+        # ----- Pair structure Ω_g -----
+
+        for l in range(self.ndoc):
+
+            ldx = self.no1 + l
+            ll = self.no1 + self.ndns + (self.ndoc - l - 1) * self.ncwo
+            ul = ll + self.ncwo
+
+            n_strong = n[ldx]
+            n_weak = n[ll:ul]
+
+            cj12 = cj12.at[ldx, ll:ul].set(0.0)
+            cj12 = cj12.at[ll:ul, ldx].set(0.0)
+            cj12 = cj12.at[ll:ul, ll:ul].set(0.0)
+
+            exch = jnp.sqrt(n_strong * n_weak)
+
+            ck12 = ck12.at[ldx, ll:ul].set(exch)
+            ck12 = ck12.at[ll:ul, ldx].set(exch)
+
+            ck12 = ck12.at[ll:ul, ll:ul].set(
+                -jnp.sqrt(jnp.outer(n_weak, n_weak))
+            )
+
         return n, vecs, cj12, ck12, rdm1
     
     def _calce(self, n,cj12,ck12,J_MO,K_MO,H_core):
@@ -1361,7 +1526,7 @@ class NOFVQE:
             params_final = params_history[-1] if len(params_history) > 0 else params_history
             self.opt_param = params_final
             return E_final, params_final, None, None, None, None, None
-        elif self.functional in ["pnof4", "pnof5"]:
+        elif self.functional in ["pnof4","pnof5","pnof7","pnof8"]:
             E_history, params_history, rdm1_history, n_history, vecs_history, cj12_history, ck12_history = self._vqe(
                 self.ene_nof, params
                 )
@@ -1420,6 +1585,41 @@ class NOFVQE:
         else:
             raise ValueError(f"Unknown/unimplemented functional or method : {self.functional}")
 
+    def nof_energy_from_coords(self, coords, mol, params, rdm1):
+        
+        charges = jnp.asarray(mol.nuclear_charges)
+
+        # --- AO integrals depending on geometry ---
+        S = qml.qchem.overlap_matrix(mol.basis_set)(coords)
+        T = qml.qchem.kinetic_matrix(mol.basis_set)(coords)
+        V = qml.qchem.attraction_matrix(mol.basis_set, charges, coords)()
+        H = T + V
+        I = qml.qchem.repulsion_tensor(mol.basis_set)(coords)
+
+        # nuclear energy
+        Enuc = jnp.squeeze(qml.qchem.nuclear_energy(charges, coords)())
+        C_MO = jnp.asarray(self.C_AO_MO)
+        J_MO,K_MO,H_core = self._JKH_MO_Full(C_MO,H,I)
+
+        n, _, cj12, ck12, rdm1 = self._pnof(params, mol.n_electrons, mol.n_orbitals, rdm1)
+
+        # --- build energy ---
+        E_elec = self._calce(n,cj12,ck12,J_MO,K_MO,H_core)
+
+        return Enuc + E_elec
+    
+    def _nuclear_gradient_auto_diff(self, mol, params, rdm1):
+        
+        coords = jnp.asarray(mol.coordinates)
+
+        grad_fn = jax.grad(
+            lambda x: self.nof_energy_from_coords(x, mol, params, rdm1)
+        )
+
+        grad = grad_fn(coords)
+
+        return np.asarray(grad)
+
     def _nuclear_gradient_dff_fedorov(self, params, crds, rdm1_opt, d_shift):
         """
         Compute nuclear gradient using central finite differences
@@ -1434,7 +1634,8 @@ class NOFVQE:
             grad (array): nuclear gradient, same shape as crds
         """
         grad = pnp.zeros_like(crds)
-
+        # last C_MO from run_scnofvqe
+        C_MO = self.C_AO_MO
         # loop over all atoms and Cartesian components
         for a in range(crds.shape[0]):
             for xyz in range(3):
@@ -1445,7 +1646,7 @@ class NOFVQE:
                 crds_plus[a, xyz] = crds[a, xyz] + d_shift
                 crds_minus[a, xyz] = crds[a, xyz] - d_shift
 
-                if self.functional not in ["pnof4","pnof5"]:
+                if self.functional not in ["pnof4","pnof5","pnof7","pnof8"]:
                     self.pl_mol = qml.qchem.Molecule(
                         symbols=self.symbols,
                         coordinates=crds_plus,
@@ -1459,10 +1660,22 @@ class NOFVQE:
                         )
                     E_minus, _, _, _, _, _ = self.ene_hf(params)
                 else:
-                    self.E_nuc, self.h_MO, self.I_MO, self.n_elec, self.norb = self._mo_integrals(crds_plus)
-                    E_plus, _, _, _, _, _ = self.ene_nof(params, rdm1=rdm1_opt)
-                    self.E_nuc, self.h_MO, self.I_MO, self.n_elec, self.norb = self._mo_integrals(crds_minus)
-                    E_minus, _, _, _, _, _ = self.ene_nof(params, rdm1=rdm1_opt)
+                    #Computing the integral using crds_plus
+                    mol_plus = self._molecule_pnl(crds_plus)
+                    _,_,_,H_plus,I_plus,E_nuc_plus = self._ao_integrals_pnl(mol_plus)
+                    J_MO_plus,K_MO_plus,H_core_plus = self._JKH_MO_Full(C_MO,H_plus,I_plus)
+                    n, _, cj12, ck12, _ = self._pnof(params, self.n_elec, self.norb, rdm1=rdm1_opt)
+                    E_elc_plus = self._calce(n,cj12,ck12,J_MO_plus,K_MO_plus,H_core_plus)
+                    E_plus = E_nuc_plus + E_elc_plus
+                    
+                    #Computing the integral using crds_minus
+                    mol_minus = self._molecule_pnl(crds_minus)
+                    _,_,_,H_minus,I_minus,E_nuc_minus = self._ao_integrals_pnl(mol_minus)
+                    J_MO_minus,K_MO_minus,H_core_minus = self._JKH_MO_Full(C_MO,H_minus,I_minus)
+                    n, _, cj12, ck12, _ = self._pnof(params, self.n_elec, self.norb, rdm1=rdm1_opt)
+                    E_elc_minus = self._calce(n,cj12,ck12,J_MO_minus,K_MO_minus,H_core_minus)
+                    E_minus = E_nuc_minus + E_elc_minus
+                    
                 grad[a, xyz] = (E_plus - E_minus) / (2 * d_shift)
         return grad
 
@@ -1498,7 +1711,7 @@ class NOFVQE:
                 p_start_plus = params_p if warm_start else self.init_param
                 p_start_minus = params_m if warm_start else self.init_param
 
-                if self.functional not in ["pnof4","pnof5"]:
+                if self.functional not in ["pnof4","pnof5","pnof7","pnof8"]:
                     self.pl_mol = qml.qchem.Molecule(
                         symbols=self.symbols,
                         coordinates=crds_plus,
@@ -1591,7 +1804,7 @@ if __name__ == "__main__":
     #xyz_file = "lih_bohr.xyz"
     #xyz_file = "lih_bohr.xyz"
     #functional=sys.argv[2]
-    functional="pnof5"
+    functional="pnof8"
     #functional="vqe"
     conv_tol=1e-6
     #init_param=0.1
@@ -1645,7 +1858,10 @@ if __name__ == "__main__":
         print("Min Ene VQE and param:", E_min, params_opt)
         print("ON",2*n)
         # Nuclear gradient
-        # grad = cal.grad()
+        mol = cal._molecule_pnl(cal.crd)
+        grad = cal._nuclear_gradient_auto_diff(mol,params_opt,rdm1_opt)
+        print(f"Nuclear gradient autodiff:\n", grad)
+        print(f"Nuclear gradient norm:\n", np.linalg.norm(grad))
         # print(f"Nuclear gradient ({gradient}):\n", grad)
         # print(f"Nuclear gradient norm:\n", np.linalg.norm(grad))
         
