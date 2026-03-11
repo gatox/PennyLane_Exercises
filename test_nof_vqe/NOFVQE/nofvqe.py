@@ -64,12 +64,13 @@ class NOFVQE:
             symbols.append(parts[0])
             geometry.append([float(x) for x in parts[1:4]])
 
+        geom_jax = jnp.array(geometry)
         geometry = pnp.array(geometry, requires_grad=False)
 
         # Build psi4 molecule directly from string
         mol = psi4.geometry(xyz_str)
 
-        return units, charge, multiplicity, symbols, geometry, mol
+        return units, charge, multiplicity, symbols, geometry, mol, geom_jax
     
     @staticmethod
     def _get_no_on(rdm1, norb, pair_doubles, tol=1e-8):
@@ -145,7 +146,7 @@ class NOFVQE:
                  optimization_level=None,
                  resilience_level=None,
                  ):
-        self.units, self.charge, self.mul, self.symbols, self.crd, self.mol = self._read_mol(geometry)
+        self.units, self.charge, self.mul, self.symbols, self.crd, self.mol, self.geom_jax = self._read_mol(geometry)
         self.basis = basis
         self.functional = functional
         self.natoms = len(self.symbols)
@@ -266,7 +267,6 @@ class NOFVQE:
         charges = jnp.asarray(mol.nuclear_charges)
         basis = mol.basis_set
         S = qml.qchem.overlap_matrix(basis)(crd)
-
         T = qml.qchem.kinetic_matrix(basis)(crd)
         V = qml.qchem.attraction_matrix(basis, charges, crd)()
         Hcore = T + V
@@ -274,7 +274,6 @@ class NOFVQE:
         ERI = qml.qchem.repulsion_tensor(basis)(crd)
 
         Enuc = jnp.squeeze(qml.qchem.nuclear_energy(charges, crd)())
-
         return S, Hcore, ERI, Enuc
 
     def _ao_integrals_pnl(self, crd, mol):
@@ -1598,13 +1597,35 @@ class NOFVQE:
         else:
             raise ValueError(f"Unknown/unimplemented functional or method : {self.functional}")
 
-    def _integral_derivatives(self, crd, mol):
-
+    def _integral_derivatives(self):
+        crd = self.geom_jax
+        mol = qml.qchem.Molecule(symbols = self.symbols, 
+                                 coordinates = crd, 
+                                 charge = self.charge, 
+                                 mult = self.mul, 
+                                 basis_name = self.basis, 
+                                 unit = self.units)
+        breakpoint()
+        grad_matrix_fn = jax.jacobian(self._overlap_matrix_dev)
+        print(grad_matrix_fn(crd))
+        
+        breakpoint()
+        
         jac_fn = jax.jacobian(lambda x: self._all_ao_integrals_pnl(x, mol))
 
         dS, dHcore, dERI, dEnuc = jac_fn(crd)
 
         return dS, dHcore, dERI, dEnuc
+    
+    
+    def _overlap_matrix_dev(self, crd):
+        molecule = qml.qchem.Molecule(symbols = self.symbols, 
+                                 coordinates = crd, 
+                                 charge = self.charge, 
+                                 mult = self.mul, 
+                                 basis_name = self.basis, 
+                                 unit = self.units)
+        return qml.qchem.overlap_matrix(molecule.basis_set)(crd)
     
     
 
@@ -1767,7 +1788,7 @@ class NOFVQE:
         RDM1 = 2*jnp.einsum('p,mp,np->mn',n,C[:,:self.nbf5],C[:,:self.nbf5],optimize=True)
         lag = 2*jnp.einsum('mq,qp,np->mn',C,elag,C,optimize=True)
         
-        dS, dHcore, dERI, dEnuc = self._integral_derivatives(crd, mol)
+        dS, dHcore, dERI, dEnuc = self._integral_derivatives()
         
         grad = jnp.zeros((self.natoms,3))
         
@@ -1913,8 +1934,8 @@ if __name__ == "__main__":
         print("Min Ene VQE and param:", E_min, params_opt)
         print("ON",2*n)
         # Nuclear gradient
-        mol = cal._molecule_pnl(cal.crd)
-        grad = cal._nuclear_gradient_analytics(mol,n,C_opt,cj12, ck12, elag)
+        # mol = cal._molecule_pnl(cal.crd)
+        # grad = cal._nuclear_gradient_analytics(mol,n,C_opt,cj12, ck12, elag)
         # print(f"Nuclear gradient autodiff:\n", grad)
         # print(f"Nuclear gradient norm:\n", np.linalg.norm(grad))
         # print(f"Nuclear gradient ({gradient}):\n", grad)
