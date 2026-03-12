@@ -264,7 +264,7 @@ class NOFVQE:
         """Compute S, T, V, H and ERIs (I) in atomic orbitals from Psi4"""
         
         # Build psi4 molecule directly from string
-        mol = psi4.geometry(self.xyz_str)
+        self.mol = mol = psi4.geometry(self.xyz_str)
         psi4.set_options({'basis': self.basis})
         self.wfn = wfn = psi4.core.Wavefunction.build(mol, psi4.core.get_global_option('basis'))
         # Integrador
@@ -854,61 +854,61 @@ class NOFVQE:
         
         return E_nuc + E, params, rdm1, n, vecs, cj12, ck12, C_new, elag
 
-    # ---------- integrals at a geometry (MO basis) from pynof ----------    
-    def _mo_integrals_pynof(self):
-        mol_local = self.mol
-        p = self.p
-        # Compute integrals with PyNOF (from AO to MO)
-        S_ao, _, _, self.H_ao, self.I_ao, self.b_mnl, _ = pynof.compute_integrals(p.wfn,mol_local,p)
-        self.C_MO = self._read_C_MO(self.C, S_ao,p)
-        J_MO,K_MO,h_MO = pynof.computeJKH_MO(self.C_MO,self.H_ao,self.I_ao, self.b_mnl,p)
-        #h_MO,I_or_b_MO = pynof.JKH_MO_tmp(self.C_MO,self.H_ao,self.I_ao,self.b_mnl,p)
-        # if self.p.RI:
-        #     b_MO = I_or_b_MO
-        #     I_MO = np.einsum("pql,rsl->prsq", b_MO, b_MO, optimize=True)
-        # else:
-        #     I_MO = np.transpose(I_or_b_MO, axes=(0,2,3,1))
-        norb = int(h_MO.shape[0])
-        E_nuc = mol_local.nuclear_repulsion_energy()
-        n_elec = p.ne
-        return jnp.array(E_nuc), jnp.array(h_MO), jnp.array(J_MO), jnp.array(K_MO), n_elec, norb
+    # # ---------- integrals at a geometry (MO basis) from pynof ----------    
+    # def _mo_integrals_pynof(self):
+    #     mol_local = self.mol
+    #     p = self.p
+    #     # Compute integrals with PyNOF (from AO to MO)
+    #     S_ao, _, _, self.H_ao, self.I_ao, self.b_mnl, _ = pynof.compute_integrals(p.wfn,mol_local,p)
+    #     self.C_MO = self._read_C_MO(self.C, S_ao,p)
+    #     J_MO,K_MO,h_MO = pynof.computeJKH_MO(self.C_MO,self.H_ao,self.I_ao, self.b_mnl,p)
+    #     #h_MO,I_or_b_MO = pynof.JKH_MO_tmp(self.C_MO,self.H_ao,self.I_ao,self.b_mnl,p)
+    #     # if self.p.RI:
+    #     #     b_MO = I_or_b_MO
+    #     #     I_MO = np.einsum("pql,rsl->prsq", b_MO, b_MO, optimize=True)
+    #     # else:
+    #     #     I_MO = np.transpose(I_or_b_MO, axes=(0,2,3,1))
+    #     norb = int(h_MO.shape[0])
+    #     E_nuc = mol_local.nuclear_repulsion_energy()
+    #     n_elec = p.ne
+    #     return jnp.array(E_nuc), jnp.array(h_MO), jnp.array(J_MO), jnp.array(K_MO), n_elec, norb
     
-    def _mo_integrals(self, crd, C_MO=None):
-        if self.gradient == "analytics":
-            E_nuc, h_MO, J_MO, K_MO, n_elec, norb = self._mo_integrals_pynof()
+    # def _mo_integrals(self, crd, C_MO=None):
+    #     if self.gradient == "analytics":
+    #         E_nuc, h_MO, J_MO, K_MO, n_elec, norb = self._mo_integrals_pynof()
             
-            if self.pair_doubles:
-                # Kill singles completely (seniority-zero ansatz)
-                self.singles = []
+    #         if self.pair_doubles:
+    #             # Kill singles completely (seniority-zero ansatz)
+    #             self.singles = []
 
-                # Keep only pair doubles
-                self.doubles = self._build_pnof5e_omega(norb,n_elec)   
-            else:
-                self.singles, self.doubles = qml.qchem.excitations(n_elec, 2 * norb)
+    #             # Keep only pair doubles
+    #             self.doubles = self._build_pnof5e_omega(norb,n_elec)   
+    #         else:
+    #             self.singles, self.doubles = qml.qchem.excitations(n_elec, 2 * norb)
 
-            print("Size Singles:",len(self.singles))
-            print("Singles:",self.singles)
-            print("Size Doubles:",len(self.doubles))
-            print("Doubles:",self.doubles)
-            return E_nuc, h_MO, J_MO, K_MO, n_elec, norb
+    #         print("Size Singles:",len(self.singles))
+    #         print("Singles:",self.singles)
+    #         print("Size Doubles:",len(self.doubles))
+    #         print("Doubles:",self.doubles)
+    #         return E_nuc, h_MO, J_MO, K_MO, n_elec, norb
 
-        else:
-            E_nuc, h_MO, I_MO, n_elec, norb, C_MO = self._mo_integrals_pennylane(crd, C_MO)    
+    #     else:
+    #         E_nuc, h_MO, I_MO, n_elec, norb, C_MO = self._mo_integrals_pennylane(crd, C_MO)    
                 
-            if self.pair_doubles:
-                # Kill singles completely (seniority-zero ansatz)
-                self.singles = []
+    #         if self.pair_doubles:
+    #             # Kill singles completely (seniority-zero ansatz)
+    #             self.singles = []
 
-                # Keep only pair doubles
-                self.doubles = self._build_pnof5e_omega()   
-            else:
-                self.singles, self.doubles = qml.qchem.excitations(n_elec, 2 * norb)
+    #             # Keep only pair doubles
+    #             self.doubles = self._build_pnof5e_omega()   
+    #         else:
+    #             self.singles, self.doubles = qml.qchem.excitations(n_elec, 2 * norb)
             
-            print("Size Singles:",len(self.singles))
-            print("Singles:",self.singles)
-            print("Size Doubles:",len(self.doubles))
-            print("Doubles:",self.doubles)
-            return E_nuc, h_MO, I_MO, n_elec, norb, C_MO
+    #         print("Size Singles:",len(self.singles))
+    #         print("Singles:",self.singles)
+    #         print("Size Doubles:",len(self.doubles))
+    #         print("Doubles:",self.doubles)
+    #         return E_nuc, h_MO, I_MO, n_elec, norb, C_MO
 
     def _wrap_angles(self, p):
         p = np.asarray(p, dtype=float)
@@ -1627,73 +1627,6 @@ class NOFVQE:
         else:
             raise ValueError(f"Unknown/unimplemented functional or method : {self.functional}")
 
-    def _integral_derivatives(self):
-        crd = self.geom_jax
-        mol = qml.qchem.Molecule(symbols = self.symbols, 
-                                 coordinates = crd, 
-                                 charge = self.charge, 
-                                 mult = self.mul, 
-                                 basis_name = self.basis, 
-                                 unit = self.units)
-        breakpoint()
-        grad_matrix_fn = jax.jacobian(self._overlap_matrix_dev)
-        print(grad_matrix_fn(crd))
-        
-        breakpoint()
-        
-        jac_fn = jax.jacobian(lambda x: self._all_ao_integrals_pnl(x, mol))
-
-        dS, dHcore, dERI, dEnuc = jac_fn(crd)
-
-        return dS, dHcore, dERI, dEnuc
-    
-    
-    def _overlap_matrix_dev(self, crd):
-        molecule = qml.qchem.Molecule(symbols = self.symbols, 
-                                 coordinates = crd, 
-                                 charge = self.charge, 
-                                 mult = self.mul, 
-                                 basis_name = self.basis, 
-                                 unit = self.units)
-        return qml.qchem.overlap_matrix(molecule.basis_set)(crd)
-    
-    
-
-    # def nof_energy_from_crd(self, crd, mol, params, rdm1):
-        
-    #     charges = jnp.asarray(mol.nuclear_charges)
-
-    #     # --- AO integrals depending on geometry ---
-    #     S = qml.qchem.overlap_matrix(mol.basis_set)(crd)
-    #     T = qml.qchem.kinetic_matrix(mol.basis_set)(crd)
-    #     V = qml.qchem.attraction_matrix(mol.basis_set, charges, crd)()
-    #     H = T + V
-    #     I = qml.qchem.repulsion_tensor(mol.basis_set)(crd)
-
-    #     # nuclear energy
-    #     Enuc = jnp.squeeze(qml.qchem.nuclear_energy(charges, crd)())
-    #     C_MO = jnp.asarray(self.C_MO)
-    #     J_MO,K_MO,H_core = self._JKH_MO_Full(C_MO,H,I)
-
-    #     n, _, cj12, ck12, rdm1 = self._pnof(params, mol.n_electrons, mol.n_orbitals, rdm1)
-
-    #     # --- build energy ---
-    #     E_elec = self._calce(n,cj12,ck12,J_MO,K_MO,H_core)
-
-    #     return Enuc + E_elec
-    
-    # def _nuclear_gradient_auto_diff(self, mol, params, rdm1):
-        
-    #     crd = jnp.asarray(mol.coordinates)
-
-    #     grad_fn = jax.grad(
-    #         lambda x: self.nof_energy_from_crd(x, mol, params, rdm1)
-    #     )
-
-    #     grad = grad_fn(crd)
-
-    #     return np.asarray(grad)
-
     def _nuclear_gradient_dff_fedorov(self, params, crds, rdm1_opt, d_shift):
         """
         Compute nuclear gradient using central finite differences
@@ -1813,38 +1746,49 @@ class NOFVQE:
 
         return grad
     
-    def _nuclear_gradient_analytics(self, mol,n,C,cj12,ck12,elag):
-        crd = jnp.array(mol.coordinates)
-        RDM1 = 2*jnp.einsum('p,mp,np->mn',n,C[:,:self.nbf5],C[:,:self.nbf5],optimize=True)
-        lag = 2*jnp.einsum('mq,qp,np->mn',C,elag,C,optimize=True)
+    def _nuclear_gradient_analytics(self, n,C,cj12,ck12,elag):
         
-        dS, dHcore, dERI, dEnuc = self._integral_derivatives()
+        mints = psi4.core.MintsHelper(self.wfn.basisset())
+        
+        RDM1 = 2*jnp.einsum('p,mp,np->mn',n[:self.nbf5],C[:,:self.nbf5],C[:,:self.nbf5],optimize=True)
+        lag = 2*jnp.einsum('mq,qp,np->mn',C,elag,C,optimize=True)
         
         grad = jnp.zeros((self.natoms,3))
         
-        grad += np.asarray(dEnuc)
+        grad += np.asarray(self.mol.nuclear_repulsion_energy_deriv1())
         
-        breakpoint()
         for i in range(self.natoms):
+            dSx,dSy,dSz = np.array(mints.ao_oei_deriv1("OVERLAP",i))
+            breakpoint()
+            grad[i,0] -= np.einsum('mn,mn->',lag,dSx,optimize=True)
+            grad[i,1] -= np.einsum('mn,mn->',lag,dSy,optimize=True)
+            grad[i,2] -= np.einsum('mn,mn->',lag,dSz,optimize=True)
 
-            dSx = np.asarray(dS[i,0])
-            dSy = np.asarray(dS[i,1])
-            dSz = np.asarray(dS[i,2])
+            dTx,dTy,dTz = np.array(mints.ao_oei_deriv1("KINETIC",i))
+            grad[i,0] += np.einsum('mn,mn->',RDM1,dTx,optimize=True)
+            grad[i,1] += np.einsum('mn,mn->',RDM1,dTy,optimize=True)
+            grad[i,2] += np.einsum('mn,mn->',RDM1,dTz,optimize=True)
 
-            dHx = np.asarray(dHcore[i,0])
-            dHy = np.asarray(dHcore[i,1])
-            dHz = np.asarray(dHcore[i,2])
-
-            grad[i,0] -= jnp.einsum('mn,mn->',lag,dSx,optimize=True)
-            grad[i,1] -= jnp.einsum('mn,mn->',lag,dSy,optimize=True)
-            grad[i,2] -= jnp.einsum('mn,mn->',lag,dSz,optimize=True)
-
-            grad[i,0] += jnp.einsum('mn,mn->',RDM1,dHx,optimize=True)
-            grad[i,1] += jnp.einsum('mn,mn->',RDM1,dHy,optimize=True)
-            grad[i,2] += jnp.einsum('mn,mn->',RDM1,dHz,optimize=True)
+            dVx,dVy,dVz = np.array(mints.ao_oei_deriv1("POTENTIAL",i))
+            grad[i,0] += np.einsum('mn,mn->',RDM1,dVx,optimize=True)
+            grad[i,1] += np.einsum('mn,mn->',RDM1,dVy,optimize=True)
+            grad[i,2] += np.einsum('mn,mn->',RDM1,dVz,optimize=True)
         
+        np.fill_diagonal(cj12,0) # Remove diag.
+        np.fill_diagonal(ck12,0) # Remove diag.
         
-    
+        RDM2 = np.einsum('pq,mp,np,sq,lq->mnsl',cj12,C[:,:self.nbf5],C[:,:self.nbf5],C[:,:self.nbf5],C[:,:self.nbf5],optimize=True)
+        RDM2 += np.einsum('p,mp,np,sp,lp->mnsl',n[:self.nbeta],C[:,:self.nbeta],C[:,:self.nbeta],C[:,:self.nbeta],C[:,:self.nbeta],optimize=True)
+        RDM2 += np.einsum('p,mp,np,sp,lp->mnsl',n[self.nalpha:self.nbf5],C[:,self.nalpha:self.nbf5],C[:,self.nalpha:self.nbf5],C[:,self.nalpha:self.nbf5],C[:,self.nalpha:self.nbf5],optimize=True)
+        RDM2 -= np.einsum('pq,mp,lp,sq,nq->mnsl',ck12,C[:,:self.nbf5],C[:,:self.nbf5],C[:,:self.nbf5],C[:,:self.nbf5],optimize=True)
+
+        for i in range(p.natoms):
+            derix,deriy,deriz = np.array(mints.ao_tei_deriv1(i))
+            grad[i,0] += np.einsum("mnsl,mnsl->",RDM2,derix,optimize=True)
+            grad[i,1] += np.einsum("mnsl,mnsl->",RDM2,deriy,optimize=True)
+            grad[i,2] += np.einsum("mnsl,mnsl->",RDM2,deriz,optimize=True)
+            
+        return grad
     # def _nuclear_gradient_analytics(self):
     #     """
     #     Computing the nuclear gradient using PyNOF package (from: 
@@ -1959,25 +1903,16 @@ if __name__ == "__main__":
     # C_MO = None
     # E_nuc, h_MO, I_MO, n_elec, norb, C_MO = cal._mo_integrals_pennylane(cal.crd, C_MO=C_MO)
     # breakpoint()
-    if pair_double:
-        E_min, params_opt, rdm1_opt, n, vecs, cj12, ck12, C_opt, elag = cal.run_scnofvqe()
-        print("Min Ene VQE and param:", E_min, params_opt)
-        print("ON",2*n)
-        # Nuclear gradient
-        # mol = cal._molecule_pnl(cal.crd)
-        # grad = cal._nuclear_gradient_analytics(mol,n,C_opt,cj12, ck12, elag)
-        # print(f"Nuclear gradient autodiff:\n", grad)
-        # print(f"Nuclear gradient norm:\n", np.linalg.norm(grad))
-        # print(f"Nuclear gradient ({gradient}):\n", grad)
-        # print(f"Nuclear gradient norm:\n", np.linalg.norm(grad))
-        
-    else:
-        E_min, params_opt, rdm1_opt, n, vecs, cj12, ck12 = cal.ene_vqe()
-        print("Min Ene VQE and param:", E_min, params_opt)
-        # Nuclear gradient
-        # grad = cal.grad()
-        # print(f"Nuclear gradient ({gradient}):\n", grad)
-        # print(f"Nuclear gradient norm:\n", np.linalg.norm(grad))
+    E_min, params_opt, rdm1_opt, n, vecs, cj12, ck12, C_opt, elag = cal.run_scnofvqe()
+    print("Min Ene VQE and param:", E_min, params_opt)
+    print("ON",2*n)
+    # Nuclear gradient
+    # mol = cal._molecule_pnl(cal.crd)
+    grad = cal._nuclear_gradient_analytics(n,C_opt,cj12, ck12, elag)
+    # print(f"Nuclear gradient autodiff:\n", grad)
+    # print(f"Nuclear gradient norm:\n", np.linalg.norm(grad))
+    # print(f"Nuclear gradient ({gradient}):\n", grad)
+    # print(f"Nuclear gradient norm:\n", np.linalg.norm(grad))
         
     # Run VQE
     # E_h, params_h, rdm1_h, n_h, vecs_h, cj12_h, ck12_h=cal._vqe(cal.ene_pnof4, init_param, crds, method="adam")
