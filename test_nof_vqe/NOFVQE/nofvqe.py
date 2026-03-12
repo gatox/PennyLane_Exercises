@@ -254,19 +254,19 @@ class NOFVQE:
     def _ao_integrals_pnl(self, crd):
         """Compute S, T, V, H and ERIs (I) in atomic orbitals from Pennylane"""
         
-        self.mol = self._molecule_pnl(crd)
-        charges = jnp.asarray(self.mol.nuclear_charges)
-        basis = self.mol.basis_set
-        S = qml.qchem.overlap_matrix(basis)(crd)
-        T = qml.qchem.kinetic_matrix(basis)(crd)
+        mol = self._molecule_pnl(crd)
+        charges = jnp.asarray(mol.nuclear_charges)
+        basis = mol.basis_set
+        S = qml.qchem.overlap_matrix(basis)()
+        T = qml.qchem.kinetic_matrix(basis)()
         V = qml.qchem.attraction_matrix(basis, charges, crd)()
         Hcore = T + V
 
-        ERI = qml.qchem.repulsion_tensor(basis)(crd)
+        ERI = qml.qchem.repulsion_tensor(basis)()
 
         Enuc = jnp.squeeze(qml.qchem.nuclear_energy(charges, crd)())
         
-        return S, Hcore, ERI, Enuc
+        return S, Hcore, ERI, Enuc, mol
     
     def _ao_integrals_psi4(self):
         """Compute S, T, V, H and ERIs (I) in atomic orbitals from Psi4"""
@@ -274,7 +274,7 @@ class NOFVQE:
         # Build psi4 molecule directly from string
         mol = psi4.geometry(self.xyz_str)
         psi4.set_options({'basis': self.basis})
-        self.wfn = psi4.core.Wavefunction.build(mol, psi4.core.get_global_option('basis'))
+        self.wfn = wfn = psi4.core.Wavefunction.build(mol, psi4.core.get_global_option('basis'))
         # Integrador
         mints = psi4.core.MintsHelper(self.wfn.basisset())
 
@@ -287,28 +287,30 @@ class NOFVQE:
         ERI = pnp.asarray(mints.ao_eri(), requires_grad=True)
         
         Enuc = mol.nuclear_repulsion_energy()
-        return S, Hcore, ERI, Enuc
+        return S, Hcore, ERI, Enuc, wfn
 
     def _ao_integrals(self, crd):
         if self.gradient == "analytics":
-            S,H,I,Enuc = self._ao_integrals_psi4()
+            S,H,I,Enuc,wfn_mol = self._ao_integrals_psi4()
         else:
-            S,H,I,Enuc = self._ao_integrals_pnl(crd)
-        return S,H,I,Enuc
+            S,H,I,Enuc,wfn_mol = self._ao_integrals_pnl(crd)
+        return S,H,I,Enuc,wfn_mol
         
-    def _global_parameters(self):
+    def _global_parameters(self, wfn_mol):
         
         if self.gradient == "analytics":
+            wfn = wfn_mol
             # ---- Global parameters for Psi4----
-            self.nalpha = self.wfn.nalpha()
-            self.nbeta = self.wfn.nbeta()
+            self.nalpha = wfn.nalpha()
+            self.nbeta = wfn.nbeta()
             self.n_elec = self.nalpha + self.nbeta
-            self.norb = self.wfn.nmo()
+            self.norb = wfn.nmo()
             
         else:
             # ---- Global parameters for Pennylane----
-            self.n_elec = self.mol.n_electrons
-            self.norb = self.mol.n_orbitals
+            mol = wfn_mol
+            self.n_elec = mol.n_electrons
+            self.norb = mol.n_orbitals
             S_mult = (self.mul - 1) / 2
             self.nalpha = int(self.n_elec//2 + S_mult)
             self.nbeta = int(self.n_elec//2 - S_mult)
@@ -780,11 +782,11 @@ class NOFVQE:
         #mol = self._molecule_pnl(self.crd)
         #crd = jnp.array(mol.coordinates)
         #S,T,V,H,I,E_nuc = self._ao_integrals_pnl(mol)
-        S,H,I,E_nuc = self._ao_integrals(self.crd)
+        S,H,I,E_nuc, wfn_mol = self._ao_integrals(self.crd)
         self.E_nuc = E_nuc
         
         # Calling global parameters after computing integrals
-        self._global_parameters()
+        self._global_parameters(wfn_mol)
         
         # Initial parameters
         init_param = self.init_param
@@ -794,12 +796,11 @@ class NOFVQE:
         if C_MO is None:
             if self.gradient == "analytics":
                 E_HF, wfn_HF = psi4.energy("HF", return_wfn=True)
-                #E_HF = E_HF - E_nuc
                 C_HF = wfn_HF.Ca().np 
                 
             else:
-                _, C_HF, _, _, _ = qml.qchem.scf(self.mol)()
-                E_HF = qml.qchem.hf_energy(self.mol)()
+                _, C_HF, _, _, _ = qml.qchem.scf(wfn_mol)()
+                E_HF = qml.qchem.hf_energy(wfn_mol)()
                 
             C_MO = C_HF
         else:
@@ -855,15 +856,10 @@ class NOFVQE:
         print("----------------")
         print(" Final Energies ")
         print("----------------")
-        if self.gradient == "analytics":
-            print("       HF Total Energy = {:15.7f}".format(E_nuc +E_HF))
-        else:
-            print("       HF Total Energy = {:15.7f}".format(E_HF))
+        print("")
+        print("       HF Total Energy = {:15.7f}".format(E_HF))
         print("Final NOF Total Energy = {:15.7f}".format(E_nuc + E))
-        if self.gradient == "analytics":
-            print("    Correlation Energy = {:15.7f}".format(E_nuc -E_HF))
-        else:
-            print("    Correlation Energy = {:15.7f}".format(E_nuc + E-E_HF))
+        print("    Correlation Energy = {:15.7f}".format(E_nuc + E-E_HF))
         print("")
         print("")
         
@@ -1933,8 +1929,8 @@ if __name__ == "__main__":
     #basis='sto-3g'
     #basis='6-31G'
     max_iterations=200
-    #gradient=sys.argv[3]
-    gradient="analytics"
+    gradient=sys.argv[3]
+    #gradient="analytics"
     #gradient="df_fedorov"
     d_shift=1e-4
     C_MO = None
