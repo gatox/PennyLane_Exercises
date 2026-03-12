@@ -187,14 +187,6 @@ class NOFVQE:
             self.init_param = 0.1
         else:
             self.init_param = init_param
-            # if self.pair_doubles:
-            #     self.init_param = init_param
-            # else:
-            #     if self.gradient == "analytics":
-            #         self.E_nuc, self.h_MO, self.J_MO, self.K_MO, self.n_elec, self.norb = self._mo_integrals(self.crd)
-            #     else:
-            #         self.E_nuc, self.h_MO, self.I_MO, self.n_elec, self.norb, C_MO = self._mo_integrals(self.crd)
-            #     self.init_param = self._initial_params(init_param)
                 
     def orthonormalize(self, C,S):
         eigval,eigvec = eigh(S) 
@@ -506,11 +498,11 @@ class NOFVQE:
         #breakpoint()
         return J_MO,K_MO,H_core
     
-    def _calcorbg_pennylane(self, y,n,cj12,ck12,C,H,I):
+    def _calcorbg(self, y,n,cj12,ck12,C,H,I):
 
-        Cnew = self._rotate_orbital_pennylane(y,C)
+        Cnew = self._rotate_orbital(y,C)
 
-        elag,_ = self._computeLagrange2_pennylane(n,cj12,ck12,Cnew,H,I)
+        elag,_ = self._computeLagrange2(n,cj12,ck12,Cnew,H,I)
 
         grad = 4*(elag - elag.T)
 
@@ -525,7 +517,7 @@ class NOFVQE:
 
         return grad
     
-    def _computeLagrange2_pennylane(self,n,cj12,ck12,C,H,I):
+    def _computeLagrange2(self,n,cj12,ck12,C,H,I):
         
         H_mat = jnp.einsum("mi,mn,nj->ij",C,H,C[:,:self.nbf5],optimize=True)
         I_MO = jnp.einsum("mp,nq,mnsl,sr,lt->pqrt",C,C[:,:self.nbf5],I,C[:,:self.nbf5],C[:,:self.nbf5],optimize=True)
@@ -555,7 +547,7 @@ class NOFVQE:
             raise RuntimeError("MSpin != 0 is not implemented yet")
         return elag, H_mat
     
-    def _rotate_orbital_pennylane(self, y,C):
+    def _rotate_orbital(self, y,C):
         
         ynew = np.zeros((self.nbf,self.nbf))
 
@@ -571,9 +563,9 @@ class NOFVQE:
 
         return Cnew
     
-    def _calcorbe_pennylane(self, y,n,cj12,ck12,C,H,I):
+    def _calcorbe(self, y,n,cj12,ck12,C,H,I):
 
-        Cnew = self._rotate_orbital_pennylane(y,C)
+        Cnew = self._rotate_orbital(y,C)
         J_MO,K_MO,H_core = self._JKH_MO_Full(Cnew,H,I)
         E = self._calce(n,cj12,ck12,J_MO,K_MO,H_core)
 
@@ -581,7 +573,7 @@ class NOFVQE:
     
     def _orbopt_adam(self, n,cj12,ck12,C,H,I):
         y = np.zeros((self.nvar))
-        E = self._calcorbe_pennylane(y, n,cj12,ck12,C,H,I)
+        E = self._calcorbe(y, n,cj12,ck12,C,H,I)
         
         alpha = self.alpha
         beta1 = 0.7
@@ -600,7 +592,7 @@ class NOFVQE:
         for i in range(self.maxloop):
             nit += 1
             
-            grad = self._calcorbg_pennylane(y*0, n,cj12,ck12,C,H,I)
+            grad = self._calcorbg(y*0, n,cj12,ck12,C,H,I)
             if np.linalg.norm(grad) < 10**-4 and improved:
                 success = True
                 break
@@ -611,9 +603,9 @@ class NOFVQE:
             vhat = v / (1.0 - beta2**(i+1))
             vhat_max = np.maximum(vhat_max, vhat)
             y = - alpha * mhat / (jnp.sqrt(vhat_max + 10**-8)) #AMSgrad
-            C = self._rotate_orbital_pennylane(y,C)
+            C = self._rotate_orbital(y,C)
             
-            E = self._calcorbe_pennylane(y*0, n,cj12,ck12,C,H,I)
+            E = self._calcorbe(y*0, n,cj12,ck12,C,H,I)
             print(f"Step = {i}, "
                     f"Etot = {float(self.E_nuc+E):.8f} Ha, "
                     f"E < best_E : {E < best_E}")
@@ -742,7 +734,7 @@ class NOFVQE:
 
     def ENERGY1r(self, C,n,H,I,cj12,ck12):
         if(self.no1==0):
-            elag,Hmat = self._computeLagrange2_pennylane(n,cj12,ck12,C,H,I)
+            elag,Hmat = self._computeLagrange2(n,cj12,ck12,C,H,I)
             E = jnp.einsum('ii',elag[:self.nbf5,:self.nbf5],optimize=True)
             E = E + jnp.einsum('i,ii',n[:self.nbf5],Hmat[:self.nbf5,:self.nbf5],optimize=True)
         else:
