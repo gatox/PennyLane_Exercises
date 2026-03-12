@@ -67,10 +67,9 @@ class NOFVQE:
         geom_jax = jnp.array(geometry)
         geometry = pnp.array(geometry, requires_grad=False)
 
-        # Build psi4 molecule directly from string
-        mol = psi4.geometry(xyz_str)
+        
 
-        return units, charge, multiplicity, symbols, geometry, mol, geom_jax
+        return units, charge, multiplicity, symbols, geometry, xyz_str, geom_jax
     
     @staticmethod
     def _get_no_on(rdm1, norb, pair_doubles, tol=1e-8):
@@ -85,11 +84,13 @@ class NOFVQE:
             )
 
             if offdiag_norm < tol:
+                #print("The RDM1 is already diagonal")
                 # Ideal seniority-zero case
                 n = jnp.diag(rdm1)
                 vecs = jnp.eye(norb)
 
             else:
+                #print("The RDM1 is not diagonal")
                 # Noise / leakage case: diagonalize
                 n_raw, vecs_raw = jnp.linalg.eigh(rdm1)
 
@@ -146,7 +147,7 @@ class NOFVQE:
                  optimization_level=None,
                  resilience_level=None,
                  ):
-        self.units, self.charge, self.mul, self.symbols, self.crd, self.mol, self.geom_jax = self._read_mol(geometry)
+        self.units, self.charge, self.mul, self.symbols, self.crd, self.xyz_str, self.geom_jax = self._read_mol(geometry)
         self.basis = basis
         self.functional = functional
         self.natoms = len(self.symbols)
@@ -156,34 +157,21 @@ class NOFVQE:
         self.conv_tol = conv_tol
         self.max_iterations = max_iterations
         self.gradient = gradient
-        self.d_shift = d_shift 
-        # self.p = pynof.param(self.mol,self.basis)
-        # self.p.ipnof = self.ipnof
-        # self.p.RI = True
+        self.d_shift = d_shift
         self.opt_param = None
         self.opt_rdm1 = None
         self.opt_n = None
         self.opt_vecs = None
         self.opt_cj12 = None
         self.opt_ck12 = None
-        self.C_AO_MO = None
+        self.C_MO = C_MO
         self.H_ao = None 
         self.I_ao = None 
         self.b_mnl = None
         self.C = None
         self.maxloop = 30
         self.energy_scale = 1e3  # mHa
-        self.icall = 0
-        self.initial_C_guess = True
         self.pair_doubles = pair_double
-        if self.gradient == "analytics" and C_MO == "guest_C_MO":
-            print("searching for C_MO guest")
-            file_C = "pynof_C.npy"
-            if os.path.exists(file_C):
-                print("reading C_MO guest")
-                self.C = pynof.read_C(self.p.title)
-            else:
-                print("No C_MO guest, then C_MO=None")
         self.dev = dev
         if self.dev != "simulator":
             self.n_shots = n_shots
@@ -198,14 +186,15 @@ class NOFVQE:
             )
             self.init_param = 0.1
         else:
-            if self.pair_doubles:
-                self.init_param = init_param
-            else:
-                if self.gradient == "analytics":
-                    self.E_nuc, self.h_MO, self.J_MO, self.K_MO, self.n_elec, self.norb = self._mo_integrals(self.crd)
-                else:
-                    self.E_nuc, self.h_MO, self.I_MO, self.n_elec, self.norb, C_MO = self._mo_integrals(self.crd)
-                self.init_param = self._initial_params(init_param)
+            self.init_param = init_param
+            # if self.pair_doubles:
+            #     self.init_param = init_param
+            # else:
+            #     if self.gradient == "analytics":
+            #         self.E_nuc, self.h_MO, self.J_MO, self.K_MO, self.n_elec, self.norb = self._mo_integrals(self.crd)
+            #     else:
+            #         self.E_nuc, self.h_MO, self.I_MO, self.n_elec, self.norb, C_MO = self._mo_integrals(self.crd)
+            #     self.init_param = self._initial_params(init_param)
                 
     def orthonormalize(self, C,S):
         eigval,eigvec = eigh(S) 
@@ -262,10 +251,12 @@ class NOFVQE:
                                  unit = self.units)
         return mol
     
-    def _all_ao_integrals_pnl(self, crd, mol):
-        """Compute S, T, V, H and ERIs (I) in atomic orbitals"""
-        charges = jnp.asarray(mol.nuclear_charges)
-        basis = mol.basis_set
+    def _ao_integrals_pnl(self, crd):
+        """Compute S, T, V, H and ERIs (I) in atomic orbitals from Pennylane"""
+        
+        self.mol = self._molecule_pnl(crd)
+        charges = jnp.asarray(self.mol.nuclear_charges)
+        basis = self.mol.basis_set
         S = qml.qchem.overlap_matrix(basis)(crd)
         T = qml.qchem.kinetic_matrix(basis)(crd)
         V = qml.qchem.attraction_matrix(basis, charges, crd)()
@@ -274,16 +265,54 @@ class NOFVQE:
         ERI = qml.qchem.repulsion_tensor(basis)(crd)
 
         Enuc = jnp.squeeze(qml.qchem.nuclear_energy(charges, crd)())
+        
+        return S, Hcore, ERI, Enuc
+    
+    def _ao_integrals_psi4(self):
+        """Compute S, T, V, H and ERIs (I) in atomic orbitals from Psi4"""
+        
+        # Build psi4 molecule directly from string
+        mol = psi4.geometry(self.xyz_str)
+        psi4.set_options({'basis': self.basis})
+        self.wfn = psi4.core.Wavefunction.build(mol, psi4.core.get_global_option('basis'))
+        # Integrador
+        mints = psi4.core.MintsHelper(self.wfn.basisset())
+
+        # Overlap, Kinetics, Potential
+        S = pnp.asarray(mints.ao_overlap(), requires_grad=True)
+        T = pnp.asarray(mints.ao_kinetic(), requires_grad=True)
+        V = jnp.asarray(mints.ao_potential())
+        Hcore = T + V
+        
+        ERI = pnp.asarray(mints.ao_eri(), requires_grad=True)
+        
+        Enuc = mol.nuclear_repulsion_energy()
         return S, Hcore, ERI, Enuc
 
-    def _ao_integrals_pnl(self, crd, mol):
-        S,H,I,Enuc = self._all_ao_integrals_pnl(crd, mol)
-        n_elec = mol.n_electrons
-        self.n_elec = n_elec
-        self.norb = mol.n_orbitals
-        S_mult = (mol.mult - 1) / 2
-        self.nalpha = int(mol.n_electrons//2 + S_mult)
-        self.nbeta = int(mol.n_electrons//2 - S_mult)
+    def _ao_integrals(self, crd):
+        if self.gradient == "analytics":
+            S,H,I,Enuc = self._ao_integrals_psi4()
+        else:
+            S,H,I,Enuc = self._ao_integrals_pnl(crd)
+        return S,H,I,Enuc
+        
+    def _global_parameters(self):
+        
+        if self.gradient == "analytics":
+            # ---- Global parameters for Psi4----
+            self.nalpha = self.wfn.nalpha()
+            self.nbeta = self.wfn.nbeta()
+            self.n_elec = self.nalpha + self.nbeta
+            self.norb = self.wfn.nmo()
+            
+        else:
+            # ---- Global parameters for Pennylane----
+            self.n_elec = self.mol.n_electrons
+            self.norb = self.mol.n_orbitals
+            S_mult = (self.mul - 1) / 2
+            self.nalpha = int(self.n_elec//2 + S_mult)
+            self.nbeta = int(self.n_elec//2 - S_mult)
+        
         self.nbf = self.norb
         self.no1 = 0
         
@@ -341,8 +370,7 @@ class NOFVQE:
         print("Singles:",self.singles)
         print("Size Doubles:",len(self.doubles))
         print("Doubles:",self.doubles)
-        #return S,T,V,H,I,core[0]
-        return S,H,I,Enuc
+        
     
     # ---------------- Selecting the functional ----------------
     def _pnof(self, params, n_elec, norb, rdm1):
@@ -447,7 +475,7 @@ class NOFVQE:
         Returns Ω in MO indices.
         """
         Omega = []
-
+        
         for l in range(self.ndoc):
             g = self.no1 + l
 
@@ -614,7 +642,7 @@ class NOFVQE:
             print("Warning: orbital optimization did not fully converge")
 
         # Save updated orbitals
-        self.C_AO_MO = C_new
+        self.C_MO = C_new
 
         return E_orb, C_new
     
@@ -748,19 +776,31 @@ class NOFVQE:
         E_HF = None
         rdm1 = None
         
-        # Atomic Orbitals Integrals from Pennylane
-        mol = self._molecule_pnl(self.crd)
-        crd = jnp.array(mol.coordinates)
+        # Computing atomic orbitals integrals
+        #mol = self._molecule_pnl(self.crd)
+        #crd = jnp.array(mol.coordinates)
         #S,T,V,H,I,E_nuc = self._ao_integrals_pnl(mol)
-        S,H,I,E_nuc = self._ao_integrals_pnl(crd,mol)
+        S,H,I,E_nuc = self._ao_integrals(self.crd)
         self.E_nuc = E_nuc
+        
+        # Calling global parameters after computing integrals
+        self._global_parameters()
+        
         # Initial parameters
         init_param = self.init_param
         
         # Initial orbitals
-        C_MO = self.C_AO_MO if self.C_AO_MO is not None else None
+        C_MO = self.C_MO if self.C_MO is not None else None
         if C_MO is None:
-            _, C_HF, _, _, _ = qml.qchem.scf(mol)()
+            if self.gradient == "analytics":
+                E_HF, wfn_HF = psi4.energy("HF", return_wfn=True)
+                #E_HF = E_HF - E_nuc
+                C_HF = wfn_HF.Ca().np 
+                
+            else:
+                _, C_HF, _, _, _ = qml.qchem.scf(self.mol)()
+                E_HF = qml.qchem.hf_energy(self.mol)()
+                
             C_MO = C_HF
         else:
             C_old = np.copy(C_MO)
@@ -770,15 +810,15 @@ class NOFVQE:
                     l = self.no1 + self.ndns + (self.ndoc - i - 1) + j*self.ndoc
                     C_MO[:,k] = C_old[:,l]
         C_MO = self.check_ortho(C_MO,S)
-        
-        E_HF = qml.qchem.hf_energy(mol)()
         print("HF energy:",E_HF)
             
         
         for it in range(max_outer):
             print(f"\n==== SC-NOFVQE Iteration {it} ====")
             
-            # 1. Initial contions to perform optimization
+            # 1. Initial contions to perform optimization 
+            #   (self._global_parameters() must be called before 
+            #   to set the excitations into self._initial_params)
             self.init_param = self._initial_params(init_param)
             
             # 2. Build integrals with the current orbitals
@@ -806,23 +846,28 @@ class NOFVQE:
                     break
             E_old = E_vqe
             E_orb_old = E_orb
-            self.C_AO_MO = C_new
+            self.C_MO = C_new
             C_MO = C_new
             
         E, elag, _, _ = self.ENERGY1r(C_new,n,H,I,cj12,ck12)
         self.init_param = init_param
         print("")
-
         print("----------------")
         print(" Final Energies ")
         print("----------------")
-        print("       HF Total Energy = {:15.7f}".format(E_HF))
-        print("Final NOF Total Energy = {:15.7f}".format(self.E_nuc + E))
-        print("    Correlation Energy = {:15.7f}".format(self.E_nuc + E-E_HF))
+        if self.gradient == "analytics":
+            print("       HF Total Energy = {:15.7f}".format(E_nuc +E_HF))
+        else:
+            print("       HF Total Energy = {:15.7f}".format(E_HF))
+        print("Final NOF Total Energy = {:15.7f}".format(E_nuc + E))
+        if self.gradient == "analytics":
+            print("    Correlation Energy = {:15.7f}".format(E_nuc -E_HF))
+        else:
+            print("    Correlation Energy = {:15.7f}".format(E_nuc + E-E_HF))
         print("")
         print("")
         
-        return self.E_nuc + E, params, rdm1, n, vecs, cj12, ck12, C_new, elag
+        return E_nuc + E, params, rdm1, n, vecs, cj12, ck12, C_new, elag
 
     # ---------- integrals at a geometry (MO basis) from pynof ----------    
     def _mo_integrals_pynof(self):
@@ -830,9 +875,9 @@ class NOFVQE:
         p = self.p
         # Compute integrals with PyNOF (from AO to MO)
         S_ao, _, _, self.H_ao, self.I_ao, self.b_mnl, _ = pynof.compute_integrals(p.wfn,mol_local,p)
-        self.C_AO_MO = self._read_C_MO(self.C, S_ao,p)
-        J_MO,K_MO,h_MO = pynof.computeJKH_MO(self.C_AO_MO,self.H_ao,self.I_ao, self.b_mnl,p)
-        #h_MO,I_or_b_MO = pynof.JKH_MO_tmp(self.C_AO_MO,self.H_ao,self.I_ao,self.b_mnl,p)
+        self.C_MO = self._read_C_MO(self.C, S_ao,p)
+        J_MO,K_MO,h_MO = pynof.computeJKH_MO(self.C_MO,self.H_ao,self.I_ao, self.b_mnl,p)
+        #h_MO,I_or_b_MO = pynof.JKH_MO_tmp(self.C_MO,self.H_ao,self.I_ao,self.b_mnl,p)
         # if self.p.RI:
         #     b_MO = I_or_b_MO
         #     I_MO = np.einsum("pql,rsl->prsq", b_MO, b_MO, optimize=True)
@@ -1070,7 +1115,6 @@ class NOFVQE:
 
             n_strong = n[ldx]
             n_weak = n[ll:ul]
-            #breakpoint()
 
             # Remove Coulomb intra-pair
             cj12 = cj12.at[ldx,ll:ul].set(0.0)
@@ -1405,7 +1449,7 @@ class NOFVQE:
         else:
             # For remote devices or other methods, let SciPy approximate the jac via FD
             jac = None  # COBYLA doesn't use gradients
-
+        
         bounds = [(-np.pi, np.pi) for _ in range(len(np.atleast_1d(params)))]
 
         iter_counter = {"i": 0}
@@ -1642,7 +1686,7 @@ class NOFVQE:
 
     #     # nuclear energy
     #     Enuc = jnp.squeeze(qml.qchem.nuclear_energy(charges, crd)())
-    #     C_MO = jnp.asarray(self.C_AO_MO)
+    #     C_MO = jnp.asarray(self.C_MO)
     #     J_MO,K_MO,H_core = self._JKH_MO_Full(C_MO,H,I)
 
     #     n, _, cj12, ck12, rdm1 = self._pnof(params, mol.n_electrons, mol.n_orbitals, rdm1)
@@ -1679,7 +1723,7 @@ class NOFVQE:
         """
         grad = pnp.zeros_like(crds)
         # last C_MO from run_scnofvqe
-        C_MO = self.C_AO_MO
+        C_MO = self.C_MO
         # loop over all atoms and Cartesian components
         for a in range(crds.shape[0]):
             for xyz in range(3):
@@ -1827,10 +1871,10 @@ class NOFVQE:
     #     Returns:
     #         grad (array): nuclear gradient, same shape as crds
     #     """
-    #     C_AO_MO = self.C_AO_MO
+    #     C_AO_MO = self.C_MO
     #     V_MO_NO = np.array(self.opt_vecs)  # columns are NOs in MO basis
     #     # Build AO->NO coefficients
-    #     C_AO_NO = np.dot(self.C_AO_MO, V_MO_NO)   # shape (nbf, norb) -> AO -> NO 
+    #     C_AO_NO = np.dot(self.C_MO, V_MO_NO)   # shape (nbf, norb) -> AO -> NO 
     #     C_AO_NO = np.array(C_AO_NO)       
     #     n_np = np.array(self.opt_n)
     #     cj12_np = np.array(self.opt_cj12)
@@ -1890,10 +1934,10 @@ if __name__ == "__main__":
     #basis='6-31G'
     max_iterations=200
     #gradient=sys.argv[3]
-    #gradient="analytics"
-    gradient="df_fedorov"
+    gradient="analytics"
+    #gradient="df_fedorov"
     d_shift=1e-4
-    C_MO = "guest_C_MO"
+    C_MO = None
     dev="simulator"
     #opt_circ="sgd"
     opt_circ="slsqp"
