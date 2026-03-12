@@ -503,7 +503,7 @@ class NOFVQE:
         K_MO = jnp.tensordot(K, D, axes=([1,2],[1,2]))
         #QHMATm
         H_core = jnp.tensordot(D, H, axes=([1,2],[0,1]))
-
+        #breakpoint()
         return J_MO,K_MO,H_core
     
     def _calcorbg_pennylane(self, y,n,cj12,ck12,C,H,I):
@@ -537,20 +537,20 @@ class NOFVQE:
         if(self.MSpin==0):
             # 2ndH/dy_ab
             
-            elag[:,:self.nbf5] +=  jnp.einsum('b,ab->ab',n,H_mat[:,:self.nbf5],optimize=True)
-            #elag[:,:self.nbf5] +=  jnp.einsum('b,ab->ab',n[:self.nbf5],H_mat[:,:self.nbf5],optimize=True)
+            #elag[:,:self.nbf5] +=  jnp.einsum('b,ab->ab',n,H_mat[:,:self.nbf5],optimize=True)
+            elag[:,:self.nbf5] +=  jnp.einsum('b,ab->ab',n[:self.nbf5],H_mat[:,:self.nbf5],optimize=True)
 
             # dJ_pp/dy_ab
             elag[:,:self.nbeta] +=  jnp.einsum('b,abbb->ab',n[:self.nbeta],I_MO[:,:self.nbeta,:self.nbeta,:self.nbeta],optimize=True)
             elag[:,self.nalpha:self.nbf5] +=  jnp.einsum('b,abbb->ab',n[self.nalpha:self.nbf5],I_MO[:,self.nalpha:self.nbf5,self.nalpha:self.nbf5,self.nalpha:self.nbf5],optimize=True)
             
             # C^J_pq dJ_pq/dy_ab 
-            elag[:,:self.nbf5] +=  jnp.einsum('bq,abqq->ab',cj12,I_MO[:,:self.nbf5,:self.nbf5,:self.nbf5],optimize=True)
-            #elag[:,:self.nbf5] +=  jnp.einsum('bq,abqq->ab',cj12[:self.nbf5,:self.nbf5],I_MO[:,:self.nbf5,:self.nbf5,:self.nbf5],optimize=True)
+            #elag[:,:self.nbf5] +=  jnp.einsum('bq,abqq->ab',cj12,I_MO[:,:self.nbf5,:self.nbf5,:self.nbf5],optimize=True)
+            elag[:,:self.nbf5] +=  jnp.einsum('bq,abqq->ab',cj12[:self.nbf5,:self.nbf5],I_MO[:,:self.nbf5,:self.nbf5,:self.nbf5],optimize=True)
 
             # -C^K_pq dK_pq/dy_ab 
-            elag[:,:self.nbf5] += -jnp.einsum('bq,aqbq->ab',ck12,I_MO[:,:self.nbf5,:self.nbf5,:self.nbf5],optimize=True)
-            #elag[:,:self.nbf5] += -jnp.einsum('bq,aqbq->ab',ck12[:self.nbf5,:self.nbf5],I_MO[:,:self.nbf5,:self.nbf5,:self.nbf5],optimize=True)
+            #elag[:,:self.nbf5] += -jnp.einsum('bq,aqbq->ab',ck12,I_MO[:,:self.nbf5,:self.nbf5,:self.nbf5],optimize=True)
+            elag[:,:self.nbf5] += -jnp.einsum('bq,aqbq->ab',ck12[:self.nbf5,:self.nbf5],I_MO[:,:self.nbf5,:self.nbf5,:self.nbf5],optimize=True)
         else:
             raise RuntimeError("MSpin != 0 is not implemented yet")
         return elag, H_mat
@@ -779,9 +779,6 @@ class NOFVQE:
         rdm1 = None
         
         # Computing atomic orbitals integrals
-        #mol = self._molecule_pnl(self.crd)
-        #crd = jnp.array(mol.coordinates)
-        #S,T,V,H,I,E_nuc = self._ao_integrals_pnl(mol)
         S,H,I,E_nuc, wfn_mol = self._ao_integrals(self.crd)
         self.E_nuc = E_nuc
         
@@ -1297,11 +1294,12 @@ class NOFVQE:
     
     def _calce(self, n,cj12,ck12,J_MO,K_MO,H_core):
         E = 0
-        
+        n_test = n
+        #breakpoint()
         if(self.MSpin==0):
             # 2H + J
-            E = E + 2*jnp.einsum('i,i',n,H_core,optimize=True)
-            #E = E + 2*jnp.einsum('i,i',n[:self.nbf5],H_core,optimize=True)
+            #E = E + 2*jnp.einsum('i,i',n,H_core,optimize=True)
+            E = E + 2*jnp.einsum('i,i',n[:self.nbf5],H_core,optimize=True)
             
             E = E + jnp.einsum('i,i',n[:self.nbeta],jnp.diagonal(J_MO)[:self.nbeta],optimize=True)
             E = E + jnp.einsum('i,i',n[self.nalpha:self.nbf5],jnp.diagonal(J_MO)[self.nalpha:self.nbf5],optimize=True)
