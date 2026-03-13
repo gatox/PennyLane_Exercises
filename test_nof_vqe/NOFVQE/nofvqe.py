@@ -310,7 +310,7 @@ class NOFVQE:
         self.nbf = self.norb
         self.no1 = 0
         
-        # ---- Fortran NBF < NE condition ----
+        # ---- Fortran NBF < NE condition (Taken from DoNOF)----
         if self.nbf < self.n_elec:
             ndif = self.n_elec - self.nbf
             if self.no1 < ndif:
@@ -411,12 +411,6 @@ class NOFVQE:
             print("Params is not none:", params)
         return params
 
-
-    # ---------------- Ansatz ----------------
-    def _ansatz(self, params, hf_state, qubits):
-        qml.BasisState(hf_state, wires=range(qubits))
-        qml.DoubleExcitation(params, wires=[0, 1, 2, 3])
-
     # ---------------- Ansatz 2----------------
     def _ansatz_2(self, params, hf_state, qubits):
         qml.BasisState(hf_state, wires=range(qubits))
@@ -454,7 +448,7 @@ class NOFVQE:
         Omega_spin = []
         for omega in Omega_mo:
             g = omega[0]          # strong orbital
-            weak_orbs = omega[1:] # weak orbitals in Ω_g
+            weak_orbs = omega[1:] # weak orbitals in Omega_g
 
             g_spin = [2*g, 2*g + 1]
 
@@ -465,8 +459,8 @@ class NOFVQE:
     
     def _build_pnof5e_omega_mo(self):
         """
-        Build Ω_g exactly as in PyNOF5 using ll / ul logic.
-        Returns Ω in MO indices.
+        Build Omega_g exactly as in PyNOF5 using ll / ul logic.
+        Returns Omega in MO indices.
         """
         Omega = []
         
@@ -640,7 +634,7 @@ class NOFVQE:
 
         return E_orb, C_new
     
-    def computeF_RC_CPU(self, J,K,n,H,cj12,ck12):
+    def _computeF_RC_CPU(self, J,K,n,H,cj12,ck12):
 
         # Matriz de Fock Generalizada
         F = jnp.zeros((self.nbf5,self.nbf,self.nbf))
@@ -685,7 +679,7 @@ class NOFVQE:
 
         return F
     
-    def JKj_Full(self, C,I):
+    def _JKj_Full(self, C,I):
         #denmatj
         D = jnp.einsum('mi,ni->imn', C[:,0:self.nbf5], C[:,0:self.nbf5], optimize=True)
         #hstarj
@@ -695,7 +689,7 @@ class NOFVQE:
         
         return J,K
     
-    def computeLagrange(self, F,C):
+    def _computeLagrange(self, F,C):
 
         G = jnp.einsum('imn,ni->mi',F,C[:,0:self.nbf5],optimize=True)
 
@@ -709,7 +703,7 @@ class NOFVQE:
 
         return elag
     
-    def computeE_elec(self, H,C,n,elag):
+    def _computeE_elec(self, H,C,n,elag):
         #EELECTRr
         E = 0
 
@@ -724,7 +718,7 @@ class NOFVQE:
 
         return E
     
-    def computeLagrangeConvergency(self, elag):
+    def _computeLagrangeConvergency(self, elag):
         # Convergency
 
         sumdiff = np.sum(np.abs(elag-elag.T))
@@ -732,21 +726,21 @@ class NOFVQE:
 
         return sumdiff,maxdiff
 
-    def ENERGY1r(self, C,n,H,I,cj12,ck12):
+    def _ENERGY1r(self, C,n,H,I,cj12,ck12):
         if(self.no1==0):
             elag,Hmat = self._computeLagrange2(n,cj12,ck12,C,H,I)
             E = jnp.einsum('ii',elag[:self.nbf5,:self.nbf5],optimize=True)
             E = E + jnp.einsum('i,ii',n[:self.nbf5],Hmat[:self.nbf5,:self.nbf5],optimize=True)
         else:
-            J,K = self.JKj_Full(C,I)
+            J,K = self._JKj_Full(C,I)
             if(self.MSpin==0):
-                F = self.computeF_RC_CPU(J,K,n,H,cj12,ck12)
+                F = self._computeF_RC_CPU(J,K,n,H,cj12,ck12)
             elif(not self.MSpin==0):
                 raise RuntimeError("MSpin != 0 is not implemented yet")
-            elag = self.computeLagrange(F,C)
-            E = self.computeE_elec(H,C,n,elag)
+            elag = self._computeLagrange(F,C)
+            E = self._computeE_elec(H,C,n,elag)
 
-        sumdiff,maxdiff = self.computeLagrangeConvergency(elag)
+        sumdiff,maxdiff = self._computeLagrangeConvergency(elag)
         
         return E,elag,sumdiff,maxdiff
     
@@ -839,7 +833,7 @@ class NOFVQE:
             self.C_MO = C_new
             C_MO = C_new
             
-        E, elag, _, _ = self.ENERGY1r(C_new,n,H,I,cj12,ck12)
+        E, elag, _, _ = self._ENERGY1r(C_new,n,H,I,cj12,ck12)
         self.init_param = init_param
         print("")
         print("----------------")
@@ -853,62 +847,6 @@ class NOFVQE:
         print("")
         
         return E_nuc + E, params, rdm1, n, vecs, cj12, ck12, C_new, elag
-
-    # # ---------- integrals at a geometry (MO basis) from pynof ----------    
-    # def _mo_integrals_pynof(self):
-    #     mol_local = self.mol
-    #     p = self.p
-    #     # Compute integrals with PyNOF (from AO to MO)
-    #     S_ao, _, _, self.H_ao, self.I_ao, self.b_mnl, _ = pynof.compute_integrals(p.wfn,mol_local,p)
-    #     self.C_MO = self._read_C_MO(self.C, S_ao,p)
-    #     J_MO,K_MO,h_MO = pynof.computeJKH_MO(self.C_MO,self.H_ao,self.I_ao, self.b_mnl,p)
-    #     #h_MO,I_or_b_MO = pynof.JKH_MO_tmp(self.C_MO,self.H_ao,self.I_ao,self.b_mnl,p)
-    #     # if self.p.RI:
-    #     #     b_MO = I_or_b_MO
-    #     #     I_MO = np.einsum("pql,rsl->prsq", b_MO, b_MO, optimize=True)
-    #     # else:
-    #     #     I_MO = np.transpose(I_or_b_MO, axes=(0,2,3,1))
-    #     norb = int(h_MO.shape[0])
-    #     E_nuc = mol_local.nuclear_repulsion_energy()
-    #     n_elec = p.ne
-    #     return jnp.array(E_nuc), jnp.array(h_MO), jnp.array(J_MO), jnp.array(K_MO), n_elec, norb
-    
-    # def _mo_integrals(self, crd, C_MO=None):
-    #     if self.gradient == "analytics":
-    #         E_nuc, h_MO, J_MO, K_MO, n_elec, norb = self._mo_integrals_pynof()
-            
-    #         if self.pair_doubles:
-    #             # Kill singles completely (seniority-zero ansatz)
-    #             self.singles = []
-
-    #             # Keep only pair doubles
-    #             self.doubles = self._build_pnof5e_omega(norb,n_elec)   
-    #         else:
-    #             self.singles, self.doubles = qml.qchem.excitations(n_elec, 2 * norb)
-
-    #         print("Size Singles:",len(self.singles))
-    #         print("Singles:",self.singles)
-    #         print("Size Doubles:",len(self.doubles))
-    #         print("Doubles:",self.doubles)
-    #         return E_nuc, h_MO, J_MO, K_MO, n_elec, norb
-
-    #     else:
-    #         E_nuc, h_MO, I_MO, n_elec, norb, C_MO = self._mo_integrals_pennylane(crd, C_MO)    
-                
-    #         if self.pair_doubles:
-    #             # Kill singles completely (seniority-zero ansatz)
-    #             self.singles = []
-
-    #             # Keep only pair doubles
-    #             self.doubles = self._build_pnof5e_omega()   
-    #         else:
-    #             self.singles, self.doubles = qml.qchem.excitations(n_elec, 2 * norb)
-            
-    #         print("Size Singles:",len(self.singles))
-    #         print("Singles:",self.singles)
-    #         print("Size Doubles:",len(self.doubles))
-    #         print("Doubles:",self.doubles)
-    #         return E_nuc, h_MO, I_MO, n_elec, norb, C_MO
 
     def _wrap_angles(self, p):
         p = np.asarray(p, dtype=float)
@@ -987,7 +925,6 @@ class NOFVQE:
                     raise RuntimeError("IBM Q unavailable after retries")
         @qml.qnode(dev, interface="jax")
         def rdm1_qnode(theta):
-            #self._ansatz(theta, hf_state, qubits)
             self._ansatz_2(theta, hf_state, qubits)
             return [qml.expval(op) for op in self._build_rdm1_ops(norb)]
 
@@ -1091,7 +1028,7 @@ class NOFVQE:
         if(self.MSpin==0 and self.nsoc>1):
             ck12 = ck12.at[self.nbeta:self.nalpha,self.nbeta:self.nalpha].set(2*jnp.outer(n[self.nbeta:self.nalpha],n[self.nbeta:self.nalpha]))
 
-        # Pair structure (Ω_g)
+        # Pair structure (Omega_g)
         for l in range(self.ndoc):
             ldx = self.no1 + l         
             # inicio y fin de los orbitales acoplados a los fuertemente ocupados
@@ -1141,7 +1078,7 @@ class NOFVQE:
         if(self.MSpin==0 and self.nsoc>1):
             ck12 = ck12.at[self.nbeta:self.nalpha,self.nbeta:self.nalpha].set(2*jnp.outer(n[self.nbeta:self.nalpha],n[self.nbeta:self.nalpha]))
 
-        # Pair structure (Ω_g)
+        # Pair structure (Omega_g)
         for l in range(self.ndoc):
             ldx = self.no1 + l         
             # inicio y fin de los orbitales acoplados a los fuertemente ocupados
@@ -1258,7 +1195,7 @@ class NOFVQE:
             - jnp.outer(n_d[self.nalpha:], n_d[self.nalpha:])
         )
 
-        # ----- Pair structure Ω_g -----
+        # ----- Pair structure Omega_g -----
 
         for l in range(self.ndoc):
 
@@ -1791,38 +1728,6 @@ class NOFVQE:
             grad = grad.at[i,2].add(jnp.einsum("mnsl,mnsl->",RDM2,deriz,optimize=True))
         return grad
     
-    # def _nuclear_gradient_analytics(self):
-    #     """
-    #     Computing the nuclear gradient using PyNOF package (from: 
-    #     https://github.com/felipelewyee/PyNOF), inspired by 
-    #     I. Mitxelena and M. Piris JCP 146, 014102 (2017)
-
-    #     Args:
-    #         the required parameters are computed once the VQE is called
-
-    #     Returns:
-    #         grad (array): nuclear gradient, same shape as crds
-    #     """
-    #     C_AO_MO = self.C_MO
-    #     V_MO_NO = np.array(self.opt_vecs)  # columns are NOs in MO basis
-    #     # Build AO->NO coefficients
-    #     C_AO_NO = np.dot(self.C_MO, V_MO_NO)   # shape (nbf, norb) -> AO -> NO 
-    #     C_AO_NO = np.array(C_AO_NO)       
-    #     n_np = np.array(self.opt_n)
-    #     cj12_np = np.array(self.opt_cj12)
-    #     ck12_np = np.array(self.opt_ck12)
-    #     H,I,b_mnl = self.H_ao, self.I_ao, self.b_mnl
-    #     if(self.p.no1==0):
-    #         elag,_ = pynof.computeLagrange2(n_np,cj12_np,ck12_np,C_AO_MO,H,I,b_mnl,self.p)
-    #     else:
-    #         J,K = pynof.computeJKj(C_AO_MO,I,b_mnl,self.p)
-    #         if(p.MSpin==0):
-    #             F = pynof.computeF_RC_driver(J,K,n_np,H,cj12_np,ck12_np,self.p)
-    #         elif(not p.MSpin==0):
-    #             F = pynof.computeF_RO_driver(J,K,n_np,H,cj12_np,ck12_np,self.p)
-    #         elag = pynof.computeLagrange(F,C_AO_MO,self.p)
-    #     return pynof.compute_geom_gradients(self.p.wfn,self.mol,n_np,C_AO_NO,cj12_np,ck12_np,elag,self.p)
-    
     def grad(self):
         """The gradient is a post-processing calculation that depends on first computing the energy by VQE optimization"""
         if self.opt_param is None and self.gradient in ["df_fedorov", "df_normal"]:
@@ -1901,33 +1806,11 @@ if __name__ == "__main__":
             optimization_level=optimization_level,
             resilience_level=resilience_level,
                  )
-    # print("Crd:",cal.crd)
-    # C_MO = None
-    # E_nuc, h_MO, I_MO, n_elec, norb, C_MO = cal._mo_integrals_pennylane(cal.crd, C_MO=C_MO)
-    # breakpoint()
+    # SCF-NOFVQE G.S.Energy
     E_min, params_opt, rdm1_opt, n, vecs, cj12, ck12, C_opt, elag = cal.run_scnofvqe()
     print("Min Ene VQE and param:", E_min, params_opt)
     print("ON",2*n)
-    # Nuclear gradient
-    # mol = cal._molecule_pnl(cal.crd)
-    grad = cal._nuclear_gradient_analytics(n,C_opt,cj12, ck12, elag)
-    print(f"Nuclear gradient autodiff:\n", grad)
+    # Nuclear Gradient (Analytic)
+    grad = cal._nuclear_gradient_analytics(n,C_opt,cj12,ck12,elag)
+    print(f"Nuclear gradient ({gradient}):\n", grad)
     print(f"Nuclear gradient norm:\n", np.linalg.norm(grad))
-    # print(f"Nuclear gradient ({gradient}):\n", grad)
-    # print(f"Nuclear gradient norm:\n", np.linalg.norm(grad))
-        
-    # Run VQE
-    # E_h, params_h, rdm1_h, n_h, vecs_h, cj12_h, ck12_h=cal._vqe(cal.ene_pnof4, init_param, crds, method="adam")
-    # Run NOF-VQE
-    # E_min, params_opt, rdm1_opt, n, vecs, cj12, ck12 = cal.ene_vqe()
-    # print("Min Ene VQE and param:", E_min, params_opt)
-    # print("params_opt:", params_opt)
-    # print("rdm1_opt:", rdm1_opt)
-    # print("n_opt:", n)
-    # print("vecs_opt:", vecs)
-    # # Nuclear gradient
-    # grad = cal.grad()
-    # print(f"Nuclear gradient ({gradient}):\n", grad)  
-    # print("Crd:",cal.crd)
-    # E_min, params_opt, rdm1_opt, n, vecs, cj12, ck12 = cal.run_scnofvqe()
-    # print("Min Ene VQE and param:", E_min, params_opt)
