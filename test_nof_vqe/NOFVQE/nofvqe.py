@@ -1755,40 +1755,42 @@ class NOFVQE:
         
         grad = jnp.zeros((self.natoms,3))
         
-        grad += np.asarray(self.mol.nuclear_repulsion_energy_deriv1())
+        grad += jnp.array(self.mol.nuclear_repulsion_energy_deriv1())
         
         for i in range(self.natoms):
-            dSx,dSy,dSz = np.array(mints.ao_oei_deriv1("OVERLAP",i))
-            breakpoint()
-            grad[i,0] -= np.einsum('mn,mn->',lag,dSx,optimize=True)
-            grad[i,1] -= np.einsum('mn,mn->',lag,dSy,optimize=True)
-            grad[i,2] -= np.einsum('mn,mn->',lag,dSz,optimize=True)
+            dSx,dSy,dSz = jnp.array(mints.ao_oei_deriv1("OVERLAP",i))
+            #breakpoint()
+            grad = grad.at[i,0].add(-jnp.einsum('mn,mn->',lag,dSx,optimize=True))
+            grad = grad.at[i,1].add(-jnp.einsum('mn,mn->',lag,dSy,optimize=True))
+            grad = grad.at[i,2].add(-jnp.einsum('mn,mn->',lag,dSz,optimize=True))
+            #breakpoint()
+            dTx,dTy,dTz = jnp.array(mints.ao_oei_deriv1("KINETIC",i))
+            grad = grad.at[i,0].add(jnp.einsum('mn,mn->',RDM1,dTx,optimize=True))
+            grad = grad.at[i,1].add(jnp.einsum('mn,mn->',RDM1,dTy,optimize=True))
+            grad = grad.at[i,2].add(jnp.einsum('mn,mn->',RDM1,dTz,optimize=True))
 
-            dTx,dTy,dTz = np.array(mints.ao_oei_deriv1("KINETIC",i))
-            grad[i,0] += np.einsum('mn,mn->',RDM1,dTx,optimize=True)
-            grad[i,1] += np.einsum('mn,mn->',RDM1,dTy,optimize=True)
-            grad[i,2] += np.einsum('mn,mn->',RDM1,dTz,optimize=True)
-
-            dVx,dVy,dVz = np.array(mints.ao_oei_deriv1("POTENTIAL",i))
-            grad[i,0] += np.einsum('mn,mn->',RDM1,dVx,optimize=True)
-            grad[i,1] += np.einsum('mn,mn->',RDM1,dVy,optimize=True)
-            grad[i,2] += np.einsum('mn,mn->',RDM1,dVz,optimize=True)
+            dVx,dVy,dVz = jnp.array(mints.ao_oei_deriv1("POTENTIAL",i))
+            grad = grad.at[i,0].add(jnp.einsum('mn,mn->',RDM1,dVx,optimize=True))
+            grad = grad.at[i,1].add(jnp.einsum('mn,mn->',RDM1,dVy,optimize=True))
+            grad = grad.at[i,2].add(jnp.einsum('mn,mn->',RDM1,dVz,optimize=True))
         
-        np.fill_diagonal(cj12,0) # Remove diag.
-        np.fill_diagonal(ck12,0) # Remove diag.
+        cj12 = cj12 - jnp.diag(jnp.diag(cj12)) # Remove diag.
+        ck12 = ck12 - jnp.diag(jnp.diag(ck12)) # Remove diag.
         
-        RDM2 = np.einsum('pq,mp,np,sq,lq->mnsl',cj12,C[:,:self.nbf5],C[:,:self.nbf5],C[:,:self.nbf5],C[:,:self.nbf5],optimize=True)
-        RDM2 += np.einsum('p,mp,np,sp,lp->mnsl',n[:self.nbeta],C[:,:self.nbeta],C[:,:self.nbeta],C[:,:self.nbeta],C[:,:self.nbeta],optimize=True)
-        RDM2 += np.einsum('p,mp,np,sp,lp->mnsl',n[self.nalpha:self.nbf5],C[:,self.nalpha:self.nbf5],C[:,self.nalpha:self.nbf5],C[:,self.nalpha:self.nbf5],C[:,self.nalpha:self.nbf5],optimize=True)
-        RDM2 -= np.einsum('pq,mp,lp,sq,nq->mnsl',ck12,C[:,:self.nbf5],C[:,:self.nbf5],C[:,:self.nbf5],C[:,:self.nbf5],optimize=True)
+        #RDM2 = jnp.einsum('pq,mp,np,sq,lq->mnsl',cj12,C[:,:self.nbf5],C[:,:self.nbf5],C[:,:self.nbf5],C[:,:self.nbf5],optimize=True)
+        RDM2 = jnp.einsum('pq,mp,np,sq,lq->mnsl',cj12[:self.nbf5,:self.nbf5],C[:,:self.nbf5],C[:,:self.nbf5],C[:,:self.nbf5],C[:,:self.nbf5],optimize=True)
+        RDM2 += jnp.einsum('p,mp,np,sp,lp->mnsl',n[:self.nbeta],C[:,:self.nbeta],C[:,:self.nbeta],C[:,:self.nbeta],C[:,:self.nbeta],optimize=True)
+        RDM2 += jnp.einsum('p,mp,np,sp,lp->mnsl',n[self.nalpha:self.nbf5],C[:,self.nalpha:self.nbf5],C[:,self.nalpha:self.nbf5],C[:,self.nalpha:self.nbf5],C[:,self.nalpha:self.nbf5],optimize=True)
+        #RDM2 -= jnp.einsum('pq,mp,lp,sq,nq->mnsl',ck12,C[:,:self.nbf5],C[:,:self.nbf5],C[:,:self.nbf5],C[:,:self.nbf5],optimize=True)
+        RDM2 -= jnp.einsum('pq,mp,lp,sq,nq->mnsl',ck12[:self.nbf5,:self.nbf5],C[:,:self.nbf5],C[:,:self.nbf5],C[:,:self.nbf5],C[:,:self.nbf5],optimize=True)
 
-        for i in range(p.natoms):
-            derix,deriy,deriz = np.array(mints.ao_tei_deriv1(i))
-            grad[i,0] += np.einsum("mnsl,mnsl->",RDM2,derix,optimize=True)
-            grad[i,1] += np.einsum("mnsl,mnsl->",RDM2,deriy,optimize=True)
-            grad[i,2] += np.einsum("mnsl,mnsl->",RDM2,deriz,optimize=True)
-            
+        for i in range(self.natoms):
+            derix,deriy,deriz = jnp.array(mints.ao_tei_deriv1(i))
+            grad = grad.at[i,0].add(jnp.einsum("mnsl,mnsl->",RDM2,derix,optimize=True))
+            grad = grad.at[i,1].add(jnp.einsum("mnsl,mnsl->",RDM2,deriy,optimize=True))
+            grad = grad.at[i,2].add(jnp.einsum("mnsl,mnsl->",RDM2,deriz,optimize=True))
         return grad
+    
     # def _nuclear_gradient_analytics(self):
     #     """
     #     Computing the nuclear gradient using PyNOF package (from: 
@@ -1909,8 +1911,8 @@ if __name__ == "__main__":
     # Nuclear gradient
     # mol = cal._molecule_pnl(cal.crd)
     grad = cal._nuclear_gradient_analytics(n,C_opt,cj12, ck12, elag)
-    # print(f"Nuclear gradient autodiff:\n", grad)
-    # print(f"Nuclear gradient norm:\n", np.linalg.norm(grad))
+    print(f"Nuclear gradient autodiff:\n", grad)
+    print(f"Nuclear gradient norm:\n", np.linalg.norm(grad))
     # print(f"Nuclear gradient ({gradient}):\n", grad)
     # print(f"Nuclear gradient norm:\n", np.linalg.norm(grad))
         
