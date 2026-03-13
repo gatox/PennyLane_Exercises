@@ -188,7 +188,7 @@ class NOFVQE:
         else:
             self.init_param = init_param
                 
-    def orthonormalize(self, C,S):
+    def _orthonormalize(self, C,S):
         eigval,eigvec = eigh(S) 
         S_12 = jnp.einsum('ij,j->ij',eigvec,eigval**(-1/2),optimize=True)
 
@@ -208,7 +208,7 @@ class NOFVQE:
         return C
         
                 
-    def check_ortho(self, C,S):
+    def _check_ortho(self, C,S):
         # Revisa ortonormalidad
         orthonormality = True
         CTSC = np.matmul(np.matmul(np.transpose(C),S),C)
@@ -218,8 +218,8 @@ class NOFVQE:
         if not orthonormality:
             print("Orthonormality violations {:d}, Maximum Violation {:f}".format((ortho_deviation > 10**-6).sum(),ortho_deviation.max()))
             print("Trying to orthonormalize")
-            C = self.orthonormalize(C,S)
-            C = self.check_ortho(C,S)
+            C = self._orthonormalize(C,S)
+            C = self._check_ortho(C,S)
         else:
             print("No violations of the orthonormality")
         for j in range(self.nbf):
@@ -793,7 +793,7 @@ class NOFVQE:
                     k = self.no1 + self.ndns + (self.ndoc - i - 1) * self.ncwo + j
                     l = self.no1 + self.ndns + (self.ndoc - i - 1) + j*self.ndoc
                     C_MO[:,k] = C_old[:,l]
-        C_MO = self.check_ortho(C_MO,S)
+        C_MO = self._check_ortho(C_MO,S)
         print("HF energy:",E_HF)
             
         
