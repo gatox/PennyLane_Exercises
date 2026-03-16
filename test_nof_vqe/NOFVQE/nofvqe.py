@@ -188,49 +188,109 @@ class NOFVQE:
         else:
             self.init_param = init_param
                 
-    def _orthonormalize(self, C,S):
-        eigval,eigvec = eigh(S) 
-        S_12 = jnp.einsum('ij,j->ij',eigvec,eigval**(-1/2),optimize=True)
+    # def _orthonormalize(self, C,S):
+    #     eigval,eigvec = eigh(S) 
+    #     S_12 = jnp.einsum('ij,j->ij',eigvec,eigval**(-1/2),optimize=True)
 
-        Cnew = jnp.einsum('ik,kj->ij',S,C,optimize=True)
+    #     Cnew = jnp.einsum('ik,kj->ij',S,C,optimize=True)
 
-        Cnew2 = jnp.einsum('ki,kj->ij',S_12,Cnew)
+    #     Cnew2 = jnp.einsum('ki,kj->ij',S_12,Cnew)
 
-        for i in range(Cnew2.shape[1]):
-            norm = jnp.einsum('k,k->',Cnew2[:,i],Cnew2[:,i],optimize=True)
-            Cnew2[:,i] = Cnew2[:,i]/jnp.sqrt(norm)
-            for j in range(i+1,Cnew2.shape[1]):
-                val = -jnp.einsum('k,k->',Cnew2[:,i],Cnew2[:,j],optimize=True)
-                Cnew2[:,j] = Cnew2[:,j] + val*Cnew2[:,i]
+    #     for i in range(Cnew2.shape[1]):
+    #         norm = jnp.einsum('k,k->',Cnew2[:,i],Cnew2[:,i],optimize=True)
+    #         Cnew2[:,i] = Cnew2[:,i]/jnp.sqrt(norm)
+    #         for j in range(i+1,Cnew2.shape[1]):
+    #             val = -jnp.einsum('k,k->',Cnew2[:,i],Cnew2[:,j],optimize=True)
+    #             Cnew2[:,j] = Cnew2[:,j] + val*Cnew2[:,i]
 
-        C = np.einsum("ik,kj->ij",S_12,Cnew2,optimize=True)
+    #     C = jnp.einsum("ik,kj->ij",S_12,Cnew2,optimize=True)
 
-        return C
+    #     return C
+    
+    def _orthonormalize(self, C, S):
+
+        # overlap in MO basis
+        M = C.T @ S @ C
+
+        # eigen decomposition
+        eigval, eigvec = eigh(M)
+
+        # inverse sqrt
+        M_inv_sqrt = eigvec @ jnp.diag(eigval**(-0.5)) @ eigvec.T
+
+        # orthonormalized orbitals
+        C_new = C @ M_inv_sqrt
+
+        return C_new
         
                 
-    def _check_ortho(self, C,S):
-        # Revisa ortonormalidad
-        orthonormality = True
-        CTSC = np.matmul(np.matmul(np.transpose(C),S),C)
-        ortho_deviation = np.abs(CTSC - np.identity(self.nbf))
-        if (np.any(ortho_deviation > 10**-6)):
-            orthonormality = False
-        if not orthonormality:
-            print("Orthonormality violations {:d}, Maximum Violation {:f}".format((ortho_deviation > 10**-6).sum(),ortho_deviation.max()))
+    # def _check_ortho(self, C,S):
+    #     # Revisa ortonormalidad
+    #     orthonormality = True
+    #     CTSC = np.matmul(np.matmul(np.transpose(C),S),C)
+    #     ortho_deviation = np.abs(CTSC - np.identity(self.nbf))
+    #     if (np.any(ortho_deviation > 10**-6)):
+    #         orthonormality = False
+    #     if not orthonormality:
+    #         print("Orthonormality violations {:d}, Maximum Violation {:f}".format((ortho_deviation > 10**-6).sum(),ortho_deviation.max()))
+    #         print("Trying to orthonormalize")
+    #         C = self._orthonormalize(C,S)
+    #         C = self._check_ortho(C,S)
+    #     else:
+    #         print("No violations of the orthonormality")
+    #     for j in range(self.nbf):
+    #         #Obtiene el índice del coeficiente con mayor valor absoluto del MO
+    #         idxmaxabsval = 0
+    #         for i in range(self.nbf):
+    #             if(abs(C[i][j])>abs(C[idxmaxabsval][j])):
+    #                 idxmaxabsval = i
+    #     # Ajusta el signo del MO
+    #     sign = np.sign(C[idxmaxabsval][j])
+    #     C[0:self.nbf,j] = sign*C[0:self.nbf,j]
+
+    #     return C
+    
+    def _check_ortho(self, C, S):
+
+        CTSC = C.T @ S @ C
+        ortho_deviation = jnp.abs(CTSC - jnp.eye(self.nbf))
+
+        violation_mask = ortho_deviation > 1e-6
+
+        if jnp.any(violation_mask):
+
+            print(
+                "Orthonormality violations {:d}, Maximum Violation {:f}".format(
+                    violation_mask.sum(), ortho_deviation.max()
+                )
+            )
             print("Trying to orthonormalize")
-            C = self._orthonormalize(C,S)
-            C = self._check_ortho(C,S)
+
+            C = self._orthonormalize(C, S)
+
+            # re-check
+            CTSC = C.T @ S @ C
+            ortho_deviation = jnp.abs(CTSC - jnp.eye(self.nbf))
+
         else:
             print("No violations of the orthonormality")
-        for j in range(self.nbf):
-            #Obtiene el índice del coeficiente con mayor valor absoluto del MO
-            idxmaxabsval = 0
-            for i in range(self.nbf):
-                if(abs(C[i][j])>abs(C[idxmaxabsval][j])):
-                    idxmaxabsval = i
-        # Ajusta el signo del MO
-        sign = np.sign(C[idxmaxabsval][j])
-        C[0:self.nbf,j] = sign*C[0:self.nbf,j]
+
+        # ----------------------------
+        # Sign convention correction
+        # ----------------------------
+
+        # index of largest |C| in each MO column
+        idxmax = jnp.argmax(jnp.abs(C), axis=0)
+
+        # values at those indices
+        col_indices = jnp.arange(self.nbf)
+        max_vals = C[idxmax, col_indices]
+
+        # sign of largest coefficient
+        signs = jnp.sign(max_vals)
+
+        # broadcast sign correction
+        C = C * signs
 
         return C
     
@@ -258,7 +318,9 @@ class NOFVQE:
 
         Enuc = jnp.squeeze(qml.qchem.nuclear_energy(charges, crd)())
         
-        return S, Hcore, ERI, Enuc, mol
+        E_HF = qml.qchem.hf_energy(mol)()
+        
+        return S, Hcore, ERI, Enuc, mol, E_HF
     
     def _ao_integrals_psi4(self):
         """Compute S, T, V, H and ERIs (I) in atomic orbitals from Psi4"""
@@ -279,14 +341,16 @@ class NOFVQE:
         ERI = pnp.asarray(mints.ao_eri(), requires_grad=True)
         
         Enuc = mol.nuclear_repulsion_energy()
-        return S, Hcore, ERI, Enuc, wfn
+        E_HF, _ = psi4.energy("HF", return_wfn=True)
+        
+        return S, Hcore, ERI, Enuc, wfn, E_HF
 
     def _ao_integrals(self, crd):
         if self.gradient == "analytics":
-            S,H,I,Enuc,wfn_mol = self._ao_integrals_psi4()
+            S,H,I,Enuc,wfn_mol,E_HF = self._ao_integrals_psi4()
         else:
-            S,H,I,Enuc,wfn_mol = self._ao_integrals_pnl(crd)
-        return S,H,I,Enuc,wfn_mol
+            S,H,I,Enuc,wfn_mol,E_HF = self._ao_integrals_pnl(crd)
+        return S,H,I,Enuc,wfn_mol,E_HF
         
     def _global_parameters(self, wfn_mol):
         
@@ -765,7 +829,7 @@ class NOFVQE:
         rdm1 = None
         
         # Computing atomic orbitals integrals
-        S,H,I,E_nuc, wfn_mol = self._ao_integrals(self.crd)
+        S,H,I,E_nuc, wfn_mol, E_HF = self._ao_integrals(self.crd)
         self.E_nuc = E_nuc
         
         # Calling global parameters after computing integrals
@@ -778,22 +842,28 @@ class NOFVQE:
         C_MO = self.C_MO if self.C_MO is not None else None
         if C_MO is None:
             if self.gradient == "analytics":
-                E_HF, wfn_HF = psi4.energy("HF", return_wfn=True)
+                _, wfn_HF = psi4.energy("HF", return_wfn=True)
                 C_HF = wfn_HF.Ca().np 
                 
             else:
                 _, C_HF, _, _, _ = qml.qchem.scf(wfn_mol)()
-                E_HF = qml.qchem.hf_energy(wfn_mol)()
                 
             C_MO = C_HF
         else:
-            C_old = np.copy(C_MO)
+        #     C_old = np.copy(C_MO)
+        #     for i in range(self.ndoc):
+        #         for j in range(self.ncwo):
+        #             k = self.no1 + self.ndns + (self.ndoc - i - 1) * self.ncwo + j
+        #             l = self.no1 + self.ndns + (self.ndoc - i - 1) + j*self.ndoc
+        #             C_MO[:,k] = C_old[:,l]
+            C_old = C_MO.copy()
             for i in range(self.ndoc):
                 for j in range(self.ncwo):
                     k = self.no1 + self.ndns + (self.ndoc - i - 1) * self.ncwo + j
                     l = self.no1 + self.ndns + (self.ndoc - i - 1) + j*self.ndoc
-                    C_MO[:,k] = C_old[:,l]
+                    C_MO = C_MO.at[:, k].set(C_old[:, l])
         C_MO = self._check_ortho(C_MO,S)
+        
         print("HF energy:",E_HF)
             
         
@@ -1606,7 +1676,7 @@ class NOFVQE:
                 else:
                     #Computing the integral using crds_plus
                     mol_plus = self._molecule_pnl(crds_plus)
-                    _,H_plus,I_plus,E_nuc_plus = self._ao_integrals_pnl(crds_plus, mol_plus)
+                    _,H_plus,I_plus,E_nuc_plus, _,_ = self._ao_integrals_pnl(crds_plus, mol_plus)
                     J_MO_plus,K_MO_plus,H_core_plus = self._JKH_MO_Full(C_MO,H_plus,I_plus)
                     n, _, cj12, ck12, _ = self._pnof(params, self.n_elec, self.norb, rdm1=rdm1_opt)
                     E_elc_plus = self._calce(n,cj12,ck12,J_MO_plus,K_MO_plus,H_core_plus)
@@ -1614,7 +1684,7 @@ class NOFVQE:
                     
                     #Computing the integral using crds_minus
                     mol_minus = self._molecule_pnl(crds_minus)
-                    _,H_minus,I_minus,E_nuc_minus = self._ao_integrals_pnl(crds_minus, mol_minus)
+                    _,H_minus,I_minus,E_nuc_minus, _,_ = self._ao_integrals_pnl(crds_minus, mol_minus)
                     J_MO_minus,K_MO_minus,H_core_minus = self._JKH_MO_Full(C_MO,H_minus,I_minus)
                     n, _, cj12, ck12, _ = self._pnof(params, self.n_elec, self.norb, rdm1=rdm1_opt)
                     E_elc_minus = self._calce(n,cj12,ck12,J_MO_minus,K_MO_minus,H_core_minus)
