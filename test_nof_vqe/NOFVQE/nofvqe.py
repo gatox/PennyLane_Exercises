@@ -12,15 +12,13 @@ from jax import numpy as jnp
 import optax
 import psi4
 psi4.core.be_quiet()
-import pynof
 from scipy.linalg import eigh, expm
 from scipy.optimize import minimize
 import re
-import os
 import cma
 
 #The necessary libraries to run on an IBM QC.
-from qiskit_ibm_runtime import QiskitRuntimeService, Session
+from qiskit_ibm_runtime import QiskitRuntimeService
 from ibm_cloud_sdk_core.api_exception import ApiException
 from qiskit_ibm_runtime.accounts.exceptions import InvalidAccountError
 
