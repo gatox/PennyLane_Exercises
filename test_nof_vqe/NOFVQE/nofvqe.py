@@ -267,10 +267,10 @@ class NOFVQE:
             print("Trying to orthonormalize")
 
             C = self._orthonormalize(C, S)
-
-            # re-check
-            CTSC = C.T @ S @ C
-            ortho_deviation = jnp.abs(CTSC - jnp.eye(self.nbf))
+            C = self._check_ortho(C, S)          
+            # # re-check
+            # CTSC = C.T @ S @ C
+            # ortho_deviation = jnp.abs(CTSC - jnp.eye(self.nbf))
 
         else:
             print("No violations of the orthonormality")
