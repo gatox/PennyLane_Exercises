@@ -167,6 +167,7 @@ class NOFVQE:
         self.I_ao = None 
         self.b_mnl = None
         self.C = None
+        self.scf_nofvqe = True
         self.maxloop = 30
         self.energy_scale = 1e3  # mHa
         self.pair_doubles = pair_double
@@ -848,12 +849,6 @@ class NOFVQE:
                 
             C_MO = C_HF
         else:
-        #     C_old = np.copy(C_MO)
-        #     for i in range(self.ndoc):
-        #         for j in range(self.ncwo):
-        #             k = self.no1 + self.ndns + (self.ndoc - i - 1) * self.ncwo + j
-        #             l = self.no1 + self.ndns + (self.ndoc - i - 1) + j*self.ndoc
-        #             C_MO[:,k] = C_old[:,l]
             C_old = C_MO.copy()
             for i in range(self.ndoc):
                 for j in range(self.ncwo):
@@ -900,21 +895,77 @@ class NOFVQE:
             E_orb_old = E_orb
             self.C_MO = C_new
             C_MO = C_new
-            
-        E, elag, _, _ = self._ENERGY1r(C_new,n,H,I,cj12,ck12)
-        self.init_param = init_param
-        print("")
-        print("----------------")
-        print(" Final Energies ")
-        print("----------------")
-        print("")
-        print("       HF Total Energy = {:15.7f}".format(E_HF))
-        print("Final NOF Total Energy = {:15.7f}".format(E_nuc + E))
-        print("    Correlation Energy = {:15.7f}".format(E_nuc + E-E_HF))
-        print("")
-        print("")
         
-        return E_nuc + E, params, rdm1, n, vecs, cj12, ck12, C_new, elag
+        if self.dev != "hybrid":
+
+            E, elag, _, _ = self._ENERGY1r(C_new,n,H,I,cj12,ck12)
+            self.init_param = init_param
+            
+                
+            print("")
+            print("----------------")
+            print(" Final Energies ")
+            print("----------------")
+            print("")
+            print("       HF Total Energy = {:15.7f}".format(E_HF))
+            print("Final NOF Total Energy = {:15.7f}".format(E_nuc + E))
+            print("    Correlation Energy = {:15.7f}".format(E_nuc + E-E_HF))
+            print("")
+            print("")
+            
+            return E_nuc + E, params, rdm1, n, vecs, cj12, ck12, C_new, elag
+        
+        else:
+            self.dev_old = self.dev
+            self.dev = "real"
+            self.opt_param = init_param
+
+            # Evaluation into the QC the optimal parameters and C_MO
+            n_eva, vecs_eva, cj12_eva, ck12_eva, rdm1_eva = self._pnof(self.opt_param, self.n_elec, self.norb)
+
+            E_eva, elag_eva, _, _ = self._ENERGY1r(C_new,n_eva,H,I,cj12_eva,ck12_eva)
+
+            print("==== Hybrid mode activated ====")
+            print("Devise: ",str(self.dev))
+            print("Opt_circ: ",self.opt_circ)
+            print("===============================")
+
+            self.dev = self.dev_old
+            #self.opt_circ = self.opt_circ_old
+            #self.opt_param = params_hybrid[-1]
+            # self.opt_rdm1 = rdm1_hybrid[-1]
+            # self.opt_n = n_hybrid[-1]
+            # self.opt_vecs = vecs_hybrid[-1]
+            # self.opt_cj12 = cj12_hybrid[-1]
+            # self.opt_ck12 = ck12_hybrid[-1]
+
+            #######The energy is evaluated into the QC#######
+            self.opt_rdm1 = rdm1_eva
+            self.opt_n = n_eva
+            self.opt_vecs = vecs_eva
+            self.opt_cj12 = cj12_eva
+            self.opt_ck12 = ck12_eva
+            #################################################
+
+            ## Diagnostic: how noise shifted the parameters
+            ##delta_theta = params_hybrid[-1] - params_history[-1]
+            ##print("(hardware - simulator) =", delta_theta)
+            ##print("square norm =", np.linalg.norm(delta_theta))
+            #return E_hybrid[-1], params_hybrid[-1], rdm1_hybrid[-1], n_hybrid[-1], vecs_hybrid[-1], cj12_hybrid[-1], ck12_hybrid[-1]
+                
+            print("")
+            print("----------------")
+            print(" Final Energies Evaluated into the QC")
+            print("----------------")
+            print("")
+            print("       HF Total Energy = {:15.7f}".format(E_HF))
+            print("Final NOF Total Energy Q.C. = {:15.7f}".format(E_nuc + E_eva))
+            print("    Correlation Energy Q.C.= {:15.7f}".format(E_nuc + E_eva-E_HF))
+            print("")
+            print("")
+
+            return E_nuc + E_eva, init_param, rdm1_eva, n_eva, vecs_eva, cj12_eva, ck12_eva, C_new, elag_eva
+
 
     def _wrap_angles(self, p):
         p = np.asarray(p, dtype=float)
@@ -1587,7 +1638,7 @@ class NOFVQE:
             print("Device: ",str(self.dev))
             print("Opt_circ: ",self.opt_circ)
             print("===============================")
-            if self.dev != "hybrid":
+            if self.dev != "hybrid" and self.scf_nofvqe is True:
                 return E_history[-1], params_history[-1], rdm1_history[-1], n_history[-1], vecs_history[-1], cj12_history[-1], ck12_history[-1]
             else:
                 self.dev_old = self.dev
