@@ -167,7 +167,7 @@ class NOFVQE:
         self.I_ao = None 
         self.b_mnl = None
         self.C = None
-        self.scf_nofvqe = True  #TODOs: include this variable to select ene_vqe of sc_nofvqe 
+        self.sc_nofvqe = True  #TODOs: include this variable to select ene_vqe of sc_nofvqe 
         self.maxloop = 30
         self.energy_scale = 1e3  # mHa
         self.pair_doubles = pair_double
@@ -1664,6 +1664,21 @@ class NOFVQE:
             
             return E_hybrid, rdm1_hybrid, n_hybrid, vecs_hybrid, cj12_hybrid, ck12_hybrid
     
+    def run_nofvqe(self):
+        if self.sc_nofvqe:
+            return self.run_scnofvqe()
+        else:
+            E_opt, params_opt, rdm1_opt, n_opt, vecs_opt, cj12_opt, ck12_opt = self.ene_vqe()
+            if self.gradient == "analytics":
+                S,H,I,_, _, _ = self._ao_integrals(self.crd)
+                _, wfn_HF = psi4.energy("HF", return_wfn=True)
+                C_HF = wfn_HF.Ca().np
+                C_MO = C_HF
+                C_MO = self._check_ortho(C_MO,S)
+                _,elag,_,_ = self._ENERGY1r(C_MO,n_opt,H,I,cj12_opt,ck12_opt)
+            else:
+                raise RuntimeError("Gradient must be analytic")
+            return E_opt, params_opt, rdm1_opt, n_opt, vecs_opt, cj12_opt, ck12_opt, C_MO, elag
 
     def _nuclear_gradient_dff_fedorov(self, params, crds, rdm1_opt, d_shift):
         """
@@ -1908,7 +1923,7 @@ if __name__ == "__main__":
             resilience_level=resilience_level,
                  )
     # SCF-NOFVQE G.S.Energy
-    E_min, params_opt, rdm1_opt, n, vecs, cj12, ck12, C_opt, elag = cal.run_scnofvqe()
+    E_min, params_opt, rdm1_opt, n, vecs, cj12, ck12, C_opt, elag = cal.run_nofvqe()
     print("Min Ene VQE and param:", E_min, params_opt)
     print("ON",2*n)
     # Nuclear Gradient (Analytic)
