@@ -926,7 +926,7 @@ class NOFVQE:
             print("===============================")
 
             # Evaluation into the QC the optimal parameters and C_MO
-            n_eva, vecs_eva, cj12_eva, ck12_eva, rdm1_eva = self._pnof(self.opt_param, self.n_elec, self.norb)
+            n_eva, vecs_eva, cj12_eva, ck12_eva, rdm1_eva = self._pnof(self.opt_param, self.n_elec, self.norb, rdm1=None)
 
             E_eva, elag_eva, _, _ = self._ENERGY1r(C_new,n_eva,H,I,cj12_eva,ck12_eva)
 
